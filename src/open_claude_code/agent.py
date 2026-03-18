@@ -166,41 +166,8 @@ class Agent:
                 return text
 
     async def _run_subagents(self, spawn_blocks: list[ToolUseBlock]) -> list[dict]:
-        """Run sub-agents concurrently and return tool result dicts."""
-        # Sub-agent tools = parent tools minus spawn_agent (no recursion)
-        sub_tools = {k: v for k, v in self.tools.items() if k != "spawn_agent"}
+        """Run sub-agents concurrently via the SubagentManager."""
+        from open_claude_code.subagents import SubagentManager
+        manager = SubagentManager(self)
+        return await manager.run(spawn_blocks)
 
-        async def run_one(block: ToolUseBlock) -> dict:
-            task = block.input.get("task", "")
-
-            # Sub-agent gets its own EventBus with auto-approve
-            sub_bus = EventBus()
-
-            async def auto_approve(_event: PreToolUse) -> bool:
-                return True
-
-            sub_bus.on_approval(auto_approve)
-
-            sub_agent = Agent(
-                provider=self.provider,
-                event_bus=sub_bus,
-                tools=sub_tools,
-                system_prompt=self.system_prompt,
-                config=self.config,
-            )
-
-            await self.event_bus.emit(SubagentStart(task=task))
-            try:
-                result = await sub_agent.run(task)
-            except Exception as e:
-                result = f"Sub-agent error: {e}"
-            await self.event_bus.emit(SubagentStop(task=task, result=result))
-
-            return {
-                "type": "tool_result",
-                "tool_use_id": block.id,
-                "content": result,
-            }
-
-        results = await asyncio.gather(*[run_one(b) for b in spawn_blocks])
-        return list(results)

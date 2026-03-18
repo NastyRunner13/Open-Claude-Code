@@ -1,5 +1,9 @@
 """Tool registry — collects and exposes all tools to the agent."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from open_claude_code.tools.edit_file import SCHEMA as EDIT_FILE_SCHEMA
 from open_claude_code.tools.edit_file import edit_file
 from open_claude_code.tools.find_files import SCHEMA as FIND_FILES_SCHEMA
@@ -8,6 +12,8 @@ from open_claude_code.tools.grep_search import SCHEMA as GREP_SEARCH_SCHEMA
 from open_claude_code.tools.grep_search import grep_search
 from open_claude_code.tools.list_directory import SCHEMA as LIST_DIRECTORY_SCHEMA
 from open_claude_code.tools.list_directory import list_directory
+from open_claude_code.tools.load_skill import SCHEMA as LOAD_SKILL_SCHEMA
+from open_claude_code.tools.load_skill import load_skill
 from open_claude_code.tools.read_file import SCHEMA as READ_FILE_SCHEMA
 from open_claude_code.tools.read_file import read_file
 from open_claude_code.tools.read_url import SCHEMA as READ_URL_SCHEMA
@@ -22,10 +28,21 @@ from open_claude_code.tools.web_search import web_search
 from open_claude_code.tools.write_file import SCHEMA as WRITE_FILE_SCHEMA
 from open_claude_code.tools.write_file import write_file
 
+if TYPE_CHECKING:
+    from open_claude_code.skills import SkillManager
 
-def get_tools() -> dict:
-    """Return the full tool registry."""
-    return {
+
+def get_tools(skill_manager: "SkillManager | None" = None) -> dict:
+    """Return the full tool registry.
+
+    Args:
+        skill_manager: Optional SkillManager to inject into the load_skill tool.
+    """
+    # Create a bound load_skill function with the manager injected
+    async def bound_load_skill(name: str) -> str:
+        return await load_skill(name, _skill_manager=skill_manager)
+
+    tools = {
         "read_file": {
             "function": read_file,
             "schema": READ_FILE_SCHEMA,
@@ -70,4 +87,11 @@ def get_tools() -> dict:
             "function": None,  # Handled directly by the agent loop
             "schema": SPAWN_AGENT_SCHEMA,
         },
+        "load_skill": {
+            "function": bound_load_skill,
+            "schema": LOAD_SKILL_SCHEMA,
+        },
     }
+
+    return tools
+

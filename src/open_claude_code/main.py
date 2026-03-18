@@ -22,6 +22,7 @@ from open_claude_code.listeners import (
 )
 from open_claude_code.modes import run_mode
 from open_claude_code.providers import ProviderError, create_provider
+from open_claude_code.skills import SkillManager
 from open_claude_code.system_prompt import MODE_PROMPTS
 from open_claude_code.tools import get_tools
 
@@ -193,6 +194,40 @@ def handle_slash_command(
         console.print()
         return "handled"
 
+    if cmd == "/skill":
+        # Requires the skill_manager to be attached to the agent
+        sm = getattr(agent, '_skill_manager', None)
+        if sm is None:
+            console.print("  Skill system not initialized.", style="dim red")
+        elif rest == "list" or not rest:
+            console.print(f"  {sm.list_formatted()}")
+        elif rest == "reload":
+            sm.rescan()
+            console.print("  Skills rescanned.", style="dim")
+        elif rest.startswith("load "):
+            name = rest[5:].strip()
+            skill = sm.load(name)
+            if skill:
+                agent.system_prompt = MODE_PROMPTS.get(
+                    getattr(agent, '_current_mode', 'agent'), 'agent'
+                ) + sm.get_prompt_additions()
+                console.print(f"  Loaded skill: [bold cyan]{skill.name}[/]")
+            else:
+                console.print(f"  Skill '{name}' not found.", style="dim red")
+        elif rest.startswith("unload "):
+            name = rest[7:].strip()
+            if sm.unload(name):
+                agent.system_prompt = MODE_PROMPTS.get(
+                    getattr(agent, '_current_mode', 'agent'), 'agent'
+                ) + sm.get_prompt_additions()
+                console.print(f"  Unloaded skill: [bold]{name}[/]")
+            else:
+                console.print(f"  Skill '{name}' is not loaded.", style="dim red")
+        else:
+            console.print("  Usage: /skill [list|load <name>|unload <name>|reload]")
+        console.print()
+        return "handled"
+
     # One-shot mode commands: /ask <text>, /plan <text>, /agent <text>
     if cmd in ("/ask", "/plan", "/agent") and rest:
         mode = cmd[1:]  # strip leading /
@@ -223,14 +258,21 @@ async def run() -> None:
     # Get system prompt for current mode
     system_prompt = MODE_PROMPTS.get(config.mode, MODE_PROMPTS["agent"])
 
+    # Initialize skill manager
+    skill_manager = SkillManager(
+        search_dirs=config.skills_dirs if config.skills_dirs else None
+    )
+
     # Create agent
     agent = Agent(
         provider=provider,
         event_bus=event_bus,
-        tools=get_tools(),
+        tools=get_tools(skill_manager=skill_manager),
         system_prompt=system_prompt,
         config=config,
     )
+    # Attach skill manager for slash command access
+    agent._skill_manager = skill_manager
 
     print_splash(config)
 
