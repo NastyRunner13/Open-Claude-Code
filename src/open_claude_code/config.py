@@ -62,6 +62,26 @@ _DEFAULT_PATHS = [
 ]
 
 
+def save_config(config: AgentConfig, path: str | Path | None = None) -> None:
+    """Save configuration to YAML file."""
+    config_path = Path(path) if path is not None else _DEFAULT_PATHS[0]
+    
+    if config_path.parent != Path(''):
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        
+    raw = {}
+    if config_path.exists():
+        try:
+            raw = yaml.safe_load(config_path.read_text()) or {}
+        except Exception:
+            pass
+            
+    # Persist the dynamic configuration properties
+    raw["mcp_servers"] = config.mcp_servers
+    
+    config_path.write_text(yaml.safe_dump(raw, sort_keys=False))
+
+
 def load_config(path: str | Path | None = None) -> AgentConfig:
     """Load configuration from YAML file.
 
