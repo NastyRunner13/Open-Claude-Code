@@ -45,6 +45,13 @@ class AgentConfig:
         ".occ/plugins",
     ])
 
+    # MCP servers: list of {name, command, args, env}
+    mcp_servers: list[dict] = field(default_factory=list)
+
+    # Context management
+    max_context_tokens: int = 100000
+    context_compaction: bool = True
+
 
 # Default config file search paths (project-local first, then global)
 _DEFAULT_PATHS = [
@@ -98,5 +105,11 @@ def _parse_config(path: Path) -> AgentConfig:
         config.skills_dirs = raw["skills_dirs"]
     if "plugins_dirs" in raw:
         config.plugins_dirs = raw["plugins_dirs"]
+    if "mcp_servers" in raw:
+        config.mcp_servers = raw["mcp_servers"]
+    if "max_context_tokens" in raw:
+        config.max_context_tokens = raw["max_context_tokens"]
+    if "context_compaction" in raw:
+        config.context_compaction = raw["context_compaction"]
 
     return config
