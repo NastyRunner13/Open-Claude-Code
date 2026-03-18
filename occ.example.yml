@@ -1,0 +1,20 @@
+# OCC Configuration
+# Copy this file to occ.yml and customize as needed.
+
+model: claude-sonnet-4-20250514
+max_tokens: 16000
+
+# Interaction mode: ask | plan | agent
+mode: agent
+
+# Skip tool approval prompts (default: false)
+skip_approval: false
+
+# Tools that auto-approve (no user prompt needed)
+auto_approve:
+  - read_file
+  - list_directory
+  - find_files
+  - grep_search
+  - web_search
+  - read_url
