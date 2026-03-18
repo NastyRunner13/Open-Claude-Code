@@ -60,6 +60,16 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Auto-approve all tool calls (skip y/n prompts)",
     )
+    parser.add_argument(
+        "--api-key",
+        default=None,
+        help="API key for the model provider (overrides env vars)",
+    )
+    parser.add_argument(
+        "--base-url",
+        default=None,
+        help="Custom API base URL (for OpenAI-compatible endpoints like OpenRouter)",
+    )
     return parser.parse_args()
 
 
@@ -81,6 +91,12 @@ def resolve_config(args: argparse.Namespace) -> AgentConfig:
 
     if args.skip_approval:
         config.skip_approval = True
+
+    if hasattr(args, 'api_key') and args.api_key:
+        config.api_key = args.api_key
+
+    if hasattr(args, 'base_url') and args.base_url:
+        config.base_url = args.base_url
 
     return config
 
@@ -178,6 +194,8 @@ async def run() -> None:
     provider = create_provider(
         model=config.model,
         max_tokens=config.max_tokens,
+        api_key=getattr(config, 'api_key', None),
+        base_url=getattr(config, 'base_url', None),
     )
 
     # Set up event bus and listeners

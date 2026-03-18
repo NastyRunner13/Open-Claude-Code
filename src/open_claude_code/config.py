@@ -19,6 +19,10 @@ class AgentConfig:
     mode: str = "agent"  # ask | plan | agent
     skip_approval: bool = False
 
+    # Provider settings
+    api_key: str | None = None
+    base_url: str | None = None
+
     # Tools that auto-approve (no user prompt)
     auto_approve: list[str] = field(default_factory=lambda: [
         "read_file",
