@@ -20,6 +20,7 @@ from open_claude_code.listeners import (
     register_logging_listeners,
     register_ui_listeners,
 )
+from open_claude_code.modes import run_mode
 from open_claude_code.providers import ProviderError, create_provider
 from open_claude_code.system_prompt import MODE_PROMPTS
 from open_claude_code.tools import get_tools
@@ -92,10 +93,10 @@ def resolve_config(args: argparse.Namespace) -> AgentConfig:
     if args.skip_approval:
         config.skip_approval = True
 
-    if hasattr(args, 'api_key') and args.api_key:
+    if args.api_key:
         config.api_key = args.api_key
 
-    if hasattr(args, 'base_url') and args.base_url:
+    if args.base_url:
         config.base_url = args.base_url
 
     return config
@@ -108,11 +109,18 @@ def print_splash(config: AgentConfig) -> None:
     if cwd.startswith(home):
         cwd = "~" + cwd[len(home):]
 
+    # Mode label with color
+    mode_style = {
+        "ask": "bold yellow",
+        "plan": "bold magenta",
+        "agent": "bold green",
+    }.get(config.mode, "bold")
+
     info = Table.grid(padding=(0, 2))
     info.add_column()
     info.add_column(style="dim")
     info.add_row("model", config.model)
-    info.add_row("mode", config.mode)
+    info.add_row("mode", Text(config.mode, style=mode_style))
     info.add_row("cwd", cwd)
 
     panel = Panel(
@@ -127,62 +135,70 @@ def print_splash(config: AgentConfig) -> None:
     # Show available slash commands
     hint = Text()
     hint.append("  Slash commands: ", style="dim")
-    hint.append("/ask", style="bold cyan")
-    hint.append(" · ", style="dim")
-    hint.append("/plan", style="bold cyan")
-    hint.append(" · ", style="dim")
-    hint.append("/agent", style="bold cyan")
-    hint.append(" · ", style="dim")
-    hint.append("/mode", style="bold cyan")
-    hint.append(" · ", style="dim")
-    hint.append("/help", style="bold cyan")
+    for i, cmd in enumerate(["/ask", "/plan", "/agent", "/mode", "/clear", "/help"]):
+        if i > 0:
+            hint.append(" · ", style="dim")
+        hint.append(cmd, style="bold cyan")
     console.print(hint)
     console.print()
 
 
-def handle_slash_command(user_input: str, config: AgentConfig, agent: Agent) -> bool:
-    """Handle slash commands. Returns True if handled, False otherwise."""
+def handle_slash_command(
+    user_input: str,
+    config: AgentConfig,
+    agent: Agent,
+) -> str | None:
+    """Handle non-mode slash commands. Returns:
+      - None if not handled (pass through to mode router)
+      - "handled" if fully handled (no further processing)
+      - "ask:<text>" / "plan:<text>" / "agent:<text>" for one-shot mode routing
+    """
     parts = user_input.strip().split(maxsplit=1)
     cmd = parts[0].lower()
+    rest = parts[1] if len(parts) > 1 else ""
 
     if cmd == "/help":
         console.print()
         help_table = Table(show_header=True, header_style="bold cyan")
         help_table.add_column("Command", style="bold")
         help_table.add_column("Description")
-        help_table.add_row("/ask <question>", "Ask a question (no tools, single response)")
-        help_table.add_row("/plan <task>", "Create a plan before executing")
-        help_table.add_row("/agent <task>", "Full agent mode with tools (default)")
+        help_table.add_row("/ask <question>", "Quick answer — no tools, single response")
+        help_table.add_row("/plan <task>", "Create plan → review → execute")
+        help_table.add_row("/agent <task>", "Full agent mode with tools")
         help_table.add_row("/mode", "Show current mode")
-        help_table.add_row("/mode <mode>", "Switch default mode")
+        help_table.add_row("/mode <mode>", "Switch default mode (ask | plan | agent)")
         help_table.add_row("/clear", "Clear conversation history")
         help_table.add_row("/help", "Show this help")
         console.print(help_table)
         console.print()
-        return True
+        return "handled"
 
     if cmd == "/mode":
-        if len(parts) > 1 and parts[1] in ("ask", "plan", "agent"):
+        if rest and rest in ("ask", "plan", "agent"):
             old_mode = config.mode
-            config.mode = parts[1]
+            config.mode = rest
             agent.system_prompt = MODE_PROMPTS.get(config.mode, MODE_PROMPTS["agent"])
             console.print(f"  Mode: {old_mode} → [bold cyan]{config.mode}[/]")
         else:
-            console.print(f"  Current mode: [bold cyan]{config.mode}[/]")
+            mode_style = {"ask": "yellow", "plan": "magenta", "agent": "green"}.get(
+                config.mode, "cyan"
+            )
+            console.print(f"  Current mode: [bold {mode_style}]{config.mode}[/]")
         console.print()
-        return True
+        return "handled"
 
     if cmd == "/clear":
         agent.history.clear()
         console.print("  Conversation history cleared.", style="dim")
         console.print()
-        return True
+        return "handled"
 
-    if cmd in ("/ask", "/plan", "/agent"):
-        # These are handled by the REPL — return False so they get processed
-        return False
+    # One-shot mode commands: /ask <text>, /plan <text>, /agent <text>
+    if cmd in ("/ask", "/plan", "/agent") and rest:
+        mode = cmd[1:]  # strip leading /
+        return f"{mode}:{rest}"
 
-    return False
+    return None
 
 
 async def run() -> None:
@@ -194,8 +210,8 @@ async def run() -> None:
     provider = create_provider(
         model=config.model,
         max_tokens=config.max_tokens,
-        api_key=getattr(config, 'api_key', None),
-        base_url=getattr(config, 'base_url', None),
+        api_key=config.api_key,
+        base_url=config.base_url,
     )
 
     # Set up event bus and listeners
@@ -220,8 +236,14 @@ async def run() -> None:
 
     # REPL loop
     while True:
+        # Show mode indicator in prompt
+        mode_char = {"ask": "?", "plan": "📋", "agent": "❯"}.get(config.mode, "❯")
+        prompt_style = {"ask": "bold yellow", "plan": "bold magenta", "agent": "bold cyan"}.get(
+            config.mode, "bold cyan"
+        )
+
         try:
-            user_input = console.input("[bold cyan]❯[/bold cyan] ")
+            user_input = console.input(f"[{prompt_style}]{mode_char}[/{prompt_style}] ")
         except (KeyboardInterrupt, EOFError):
             console.print("\nGoodbye! 👋", style="dim")
             return
@@ -232,55 +254,19 @@ async def run() -> None:
 
         # Handle slash commands
         if stripped.startswith("/"):
-            if handle_slash_command(stripped, config, agent):
+            result = handle_slash_command(stripped, config, agent)
+            if result == "handled":
                 continue
-
-            # Slash commands that submit to the agent
-            parts = stripped.split(maxsplit=1)
-            cmd = parts[0].lower()
-            rest = parts[1] if len(parts) > 1 else ""
-
-            if cmd == "/ask" and rest:
-                # Ask mode: use ask prompt, no tools
-                original_prompt = agent.system_prompt
-                original_tools = agent.tools
-                agent.system_prompt = MODE_PROMPTS["ask"]
-                agent.tools = {}
-                try:
-                    await agent.run(rest)
-                except ProviderError as e:
-                    console.print(f"  Error: {e}", style="bold red")
-                finally:
-                    agent.system_prompt = original_prompt
-                    agent.tools = original_tools
+            if result and ":" in result:
+                # One-shot mode: "ask:question" / "plan:task" / "agent:task"
+                mode, text = result.split(":", 1)
+                await run_mode(mode, agent, text)
                 console.print()
                 continue
 
-            if cmd == "/plan" and rest:
-                agent.system_prompt = MODE_PROMPTS["plan"]
-                try:
-                    await agent.run(rest)
-                except ProviderError as e:
-                    console.print(f"  Error: {e}", style="bold red")
-                console.print()
-                continue
-
-            if cmd == "/agent" and rest:
-                agent.system_prompt = MODE_PROMPTS["agent"]
-                try:
-                    await agent.run(rest)
-                except ProviderError as e:
-                    console.print(f"  Error: {e}", style="bold red")
-                console.print()
-                continue
-
-        # Normal input — use current mode
-        try:
-            await agent.run(stripped)
-            console.print()
-        except ProviderError as e:
-            console.print(f"  Error: {e}", style="bold red")
-            console.print()
+        # Normal input — route through current default mode
+        await run_mode(config.mode, agent, stripped)
+        console.print()
 
 
 def main() -> None:
