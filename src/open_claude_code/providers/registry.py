@@ -21,6 +21,7 @@ def create_provider(
     max_tokens: int = 16000,
     api_key: str | None = None,
     base_url: str | None = None,
+    prompt_caching: bool = True,
 ) -> Provider:
     """Create the appropriate provider based on model name.
 
@@ -50,7 +51,10 @@ def create_provider(
     # Model name prefix detection
     if model_lower.startswith("claude"):
         from .anthropic import AnthropicProvider
-        return AnthropicProvider(model=model, max_tokens=max_tokens, api_key=api_key)
+        return AnthropicProvider(
+            model=model, max_tokens=max_tokens, api_key=api_key,
+            prompt_caching=prompt_caching,
+        )
 
     if any(model_lower.startswith(p) for p in ("gpt-", "o1-", "o3-", "o4-", "chatgpt-")):
         from .openai import OpenAIProvider
@@ -70,4 +74,7 @@ def create_provider(
 
     # Default → Anthropic
     from .anthropic import AnthropicProvider
-    return AnthropicProvider(model=model, max_tokens=max_tokens, api_key=api_key)
+    return AnthropicProvider(
+        model=model, max_tokens=max_tokens, api_key=api_key,
+        prompt_caching=prompt_caching,
+    )
