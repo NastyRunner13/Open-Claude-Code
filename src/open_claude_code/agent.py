@@ -1,6 +1,7 @@
 """Core agent loop — conversation history, tool dispatch, event emission.
 
 Contains ZERO UI or approval logic. All side effects go through the EventBus.
+Supports an optional MiddlewareManager for composable feature injection.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from open_claude_code.events import (
     SubagentStop,
     Thinking,
 )
+from open_claude_code.context import ContextManager
 from open_claude_code.providers.base import (
     Provider,
     ProviderResponse,
@@ -27,6 +29,7 @@ from open_claude_code.system_prompt import AGENT_SYSTEM_PROMPT
 
 if TYPE_CHECKING:
     from open_claude_code.config import AgentConfig
+    from open_claude_code.middleware import MiddlewareManager
 
 
 class Agent:
@@ -34,6 +37,10 @@ class Agent:
 
     The loop is deliberately kept pure — no UI, no approval logic.
     Everything flows through the EventBus.
+
+    The optional MiddlewareManager provides composable feature injection:
+    tools, prompt additions, and lifecycle hooks are all handled by middleware
+    without modifying this core loop.
     """
 
     def __init__(
@@ -43,6 +50,7 @@ class Agent:
         tools: dict | None = None,
         system_prompt: str = AGENT_SYSTEM_PROMPT,
         config: "AgentConfig | None" = None,
+        middleware_manager: "MiddlewareManager | None" = None,
     ) -> None:
         self.provider = provider
         self.event_bus = event_bus
@@ -50,21 +58,56 @@ class Agent:
         self.system_prompt = system_prompt
         self.config = config
         self.history: list[dict] = []
+        self.middleware = middleware_manager
+        self._context_mgr = ContextManager(
+            max_context_tokens=config.max_context_tokens if config else 100000,
+            provider=provider,
+        )
 
         # Derive auto-approve set from config
         self._auto_approve: set[str] = set()
         if config and config.auto_approve:
             self._auto_approve = set(config.auto_approve)
 
+        # Planning tools are always auto-approved (they're non-destructive)
+        self._auto_approve.update(["write_plan", "update_plan", "read_plan"])
+
+    async def initialize(self) -> None:
+        """Initialize middleware and merge tools/prompts.
+
+        Call this after construction if using middleware.
+        """
+        if self.middleware:
+            await self.middleware.startup(self)
+            # Merge middleware tools into our tool registry
+            self.tools.update(self.middleware.collect_tools())
+
+    def _build_system_prompt(self) -> str:
+        """Build the full system prompt including middleware additions."""
+        base = self.system_prompt
+        if self.middleware:
+            additions = self.middleware.build_prompt_additions()
+            if additions:
+                base = f"{base}\n\n{additions}"
+        return base
+
     async def run(self, user_input: str) -> str:
         """Run one turn of the agent loop. Returns the final text response."""
+        # Let middleware transform input
+        if self.middleware:
+            user_input = await self.middleware.on_turn_start(user_input)
+
         self.history.append({"role": "user", "content": user_input})
 
         tool_schemas = [tool["schema"] for tool in self.tools.values()]
+        system_prompt = self._build_system_prompt()
 
         while True:
+            # Auto-compact history if approaching context limit
+            self.history = await self._context_mgr.auto_compact_async(self.history)
+
             response: ProviderResponse = await self.provider.send(
-                self.history, tool_schemas, self.system_prompt
+                self.history, tool_schemas, system_prompt
             )
 
             # Emit thinking trace if present
@@ -124,10 +167,13 @@ class Agent:
                     else:
                         result = f"Unknown tool: {block.name}"
 
+                    # Convert ToolResult to string for display and LLM
+                    result_str = str(result)
+
                     await self.event_bus.emit(
                         PostToolUse(
                             tool_name=block.name,
-                            result=result,
+                            result=result_str,
                             tool_use_id=block.id,
                         )
                     )
@@ -135,7 +181,7 @@ class Agent:
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
-                        "content": result,
+                        "content": result_str,
                     })
 
                 # Process spawn_agent calls concurrently
@@ -162,6 +208,10 @@ class Agent:
                 else:
                     self.history.append({"role": "assistant", "content": text})
 
+                # Notify middleware of turn completion
+                if self.middleware:
+                    await self.middleware.on_turn_end(text)
+
                 await self.event_bus.emit(Stop(text=text))
                 return text
 
@@ -170,4 +220,3 @@ class Agent:
         from open_claude_code.subagents import SubagentManager
         manager = SubagentManager(self)
         return await manager.run(spawn_blocks)
-

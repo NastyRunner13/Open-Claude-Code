@@ -52,6 +52,12 @@ class AgentConfig:
     max_context_tokens: int = 100000
     context_compaction: bool = True
 
+    # Prompt caching (Anthropic only — reduces cost up to 90%)
+    prompt_caching: bool = True
+
+    # Memory file search locations
+    memory_dirs: list[str] = field(default_factory=lambda: ["."])
+
 
 # Default config file search paths (project-local first, then global)
 _DEFAULT_PATHS = [
@@ -131,5 +137,9 @@ def _parse_config(path: Path) -> AgentConfig:
         config.max_context_tokens = raw["max_context_tokens"]
     if "context_compaction" in raw:
         config.context_compaction = raw["context_compaction"]
+    if "prompt_caching" in raw:
+        config.prompt_caching = raw["prompt_caching"]
+    if "memory_dirs" in raw:
+        config.memory_dirs = raw["memory_dirs"]
 
     return config

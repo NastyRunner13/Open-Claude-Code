@@ -45,13 +45,13 @@ class TestContextManager:
     def test_compact_short_history(self):
         cm = ContextManager(keep_recent=5)
         history = [{"role": "user", "content": f"msg {i}"} for i in range(3)]
-        result = cm.compact(history)
+        result = asyncio.run(cm.compact(history))
         assert len(result) == 3  # No compaction needed
 
     def test_compact_long_history(self):
         cm = ContextManager(keep_recent=5)
         history = [{"role": "user", "content": f"Message number {i}"} for i in range(30)]
-        result = cm.compact(history)
+        result = asyncio.run(cm.compact(history))
         # Should be: 2 first + 1 summary + 5 recent = 8
         assert len(result) == 8
         # Summary message should exist
@@ -74,7 +74,7 @@ class TestContextManager:
     def test_compact_preserves_first_messages(self):
         cm = ContextManager(keep_recent=3)
         history = [{"role": "user", "content": f"msg {i}"} for i in range(20)]
-        result = cm.compact(history)
+        result = asyncio.run(cm.compact(history))
         assert result[0]["content"] == "msg 0"
         assert result[1]["content"] == "msg 1"
 
@@ -93,7 +93,7 @@ class TestContextManager:
                 {"type": "tool_result", "tool_use_id": f"t{i}", "content": f"content {i}"},
             ]})
 
-        result = cm.compact(history)
+        result = asyncio.run(cm.compact(history))
         assert len(result) < len(history)
         # Summary should mention tool operations
         summary = result[2]["content"]

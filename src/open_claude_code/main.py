@@ -1,4 +1,4 @@
-"""CLI entry point — wires up the agent with listeners and runs the REPL."""
+"""CLI entry point — wires up the agent with middleware and runs the REPL."""
 
 from __future__ import annotations
 
@@ -17,15 +17,18 @@ from open_claude_code import __version__
 from open_claude_code.agent import Agent
 from open_claude_code.config import AgentConfig, load_config, save_config
 from open_claude_code.events import EventBus
-from open_claude_code.mcp import MCPManager, MCPServerConfig
 from open_claude_code.listeners import (
     register_approval_listener,
     register_logging_listeners,
     register_ui_listeners,
 )
+from open_claude_code.middleware import MiddlewareManager
+from open_claude_code.middleware.mcp import MCPMiddleware
+from open_claude_code.middleware.memory import MemoryMiddleware
+from open_claude_code.middleware.skills import SkillsMiddleware
 from open_claude_code.modes import run_mode
+from open_claude_code.planning import PlanningMiddleware
 from open_claude_code.providers import ProviderError, create_provider
-from open_claude_code.skills import SkillManager
 from open_claude_code.system_prompt import MODE_PROMPTS
 from open_claude_code.tools import get_tools
 
@@ -106,43 +109,130 @@ def resolve_config(args: argparse.Namespace) -> AgentConfig:
     return config
 
 
-def print_splash(config: AgentConfig) -> None:
-    """Print the welcome banner with premium styling."""
+def print_splash(config: AgentConfig, middleware_mgr: "MiddlewareManager | None" = None) -> None:
+    """Print the Claude Code-inspired welcome banner.
+
+    Layout:
+      ┌─────────── Open Claude Code v0.1.0 ───────────┐
+      │                                                │
+      │        ██████╗   ██████╗  ██████╗              │
+      │       ██╔═══██╗ ██╔════╝ ██╔════╝              │
+      │       ██║   ██║ ██║      ██║                   │
+      │       ╚██████╔╝ ╚██████╗ ╚██████╗              │
+      │        ╚═════╝   ╚═════╝  ╚═════╝              │
+      │                                                │
+      │  Model · Mode · /working/dir                   │
+      │                                                │
+      │  Active middleware    │  Quick start            │
+      │  ✓ MCP (2 servers)   │  /help for commands     │
+      │  ✓ Skills (3 loaded) │  /mode to switch        │
+      │  ✓ Memory            │  /plan to plan           │
+      └────────────────────────────────────────────────┘
+    """
+
+
     cwd = os.getcwd()
     home = os.path.expanduser("~")
     if cwd.startswith(home):
         cwd = "~" + cwd[len(home):]
 
-    # Mode styling
+    # ── ASCII art "OCC" ──────────────────────────────────────────
+    OCC_ART = [
+        " ██████╗   ██████╗  ██████╗ ",
+        "██╔═══██╗ ██╔════╝ ██╔════╝ ",
+        "██║   ██║ ██║      ██║      ",
+        "██║   ██║ ██║      ██║      ",
+        "╚██████╔╝ ╚██████╗ ╚██████╗ ",
+        " ╚═════╝   ╚═════╝  ╚═════╝ ",
+    ]
+
+    # Gradient colors for the ASCII art rows (cyan → blue)
+    art_colors = [
+        "#00e5ff",  # bright cyan
+        "#00d4ff",
+        "#00bfff",  # deep sky blue
+        "#00aaff",
+        "#0095ff",
+        "#0080ff",  # bright blue
+    ]
+
+    # ── Mode badge ───────────────────────────────────────────────
     mode_config = {
-        "ask": ("?", "bold yellow", "yellow"),
-        "plan": ("📋", "bold magenta", "magenta"),
-        "agent": ("❯", "bold green", "green"),
+        "ask": ("?", "bold yellow"),
+        "plan": ("📋", "bold magenta"),
+        "agent": ("⚡", "bold green"),
     }
-    mode_icon, mode_style, _ = mode_config.get(config.mode, ("❯", "bold", "cyan"))
+    mode_icon, mode_style = mode_config.get(config.mode, ("❯", "bold cyan"))
 
-    # Build info grid
-    info = Table.grid(padding=(0, 2))
-    info.add_column(style="bold bright_cyan")
-    info.add_column()
+    # ── Build the splash content ─────────────────────────────────
+    splash = Text()
 
-    info.add_row("Model", Text(config.model, style="bold white"))
-    info.add_row("Mode", Text(f"{mode_icon} {config.mode}", style=mode_style))
-    info.add_row("Directory", Text(cwd, style="dim"))
+    # ASCII art block
+    for i, line in enumerate(OCC_ART):
+        splash.append("    " + line + "\n", style=f"bold {art_colors[i]}")
 
-    # ASCII art title
-    title_text = Text()
-    title_text.append("╭──", style="bright_cyan")
-    title_text.append(" Open Claude Code ", style="bold bright_cyan")
-    title_text.append(f"v{__version__} ", style="dim cyan")
-    title_text.append("──╮", style="bright_cyan")
+    splash.append("\n")
+
+    # Model · Mode · Directory info line (centered feel)
+    splash.append("    ", style="dim")
+    splash.append(config.model, style="bold white")
+    splash.append(" · ", style="dim")
+    splash.append(f"{mode_icon} {config.mode}", style=mode_style)
+    splash.append(" · ", style="dim")
+    splash.append("Max ", style="dim")
+    splash.append(f"{config.max_tokens // 1000}k", style="bold white")
+    splash.append("\n", style="dim")
+    splash.append("    ", style="dim")
+    splash.append(cwd, style="dim")
+
+    # ── Middleware status (right column) ─────────────────────────
+    right = Text()
+    right.append("Active middleware\n", style="bold bright_green")
+
+    if middleware_mgr:
+        mw_list = middleware_mgr.middlewares if hasattr(middleware_mgr, 'middlewares') else []
+        for mw in mw_list:
+            name = getattr(mw, 'name', type(mw).__name__.replace('Middleware', ''))
+            # Try to get extra info
+            detail = ""
+            if hasattr(mw, 'manager'):
+                mgr = mw.manager
+                if hasattr(mgr, 'servers') and mgr.servers:
+                    detail = f" ({len(mgr.servers)} server{'s' if len(mgr.servers) != 1 else ''})"
+                elif hasattr(mgr, '_loaded_skills'):
+                    count = len(mgr._loaded_skills)
+                    detail = f" ({count} loaded)" if count else ""
+                elif hasattr(mgr, '_files'):
+                    count = len(mgr._files)
+                    detail = f" ({count} file{'s' if count != 1 else ''})" if count else ""
+            right.append("  ✓ ", style="bright_green")
+            right.append(f"{name}{detail}\n", style="white")
+    else:
+        right.append("  ─ none\n", style="dim")
+
+    right.append("\n")
+    right.append("Quick start\n", style="bold bright_yellow")
+    right.append("  /help  ", style="bold white")
+    right.append("for commands\n", style="dim")
+    right.append("  /mode  ", style="bold white")
+    right.append("switch modes\n", style="dim")
+    right.append("  /plan  ", style="bold white")
+    right.append("create a plan\n", style="dim")
+
+    # ── Combine in columns ───────────────────────────────────────
+    layout = Table.grid(padding=(0, 4))
+    layout.add_column(ratio=3)
+    layout.add_column(ratio=2)
+    layout.add_row(splash, right)
 
     panel = Panel(
-        info,
-        title=f"[bold bright_cyan]⚡ OCC[/] [dim]v{__version__}[/]",
-        subtitle="[dim]type /help for commands[/]",
+        layout,
+        title=f"[bold bright_cyan]⚡ Open Claude Code[/] [dim]v{__version__}[/]",
+        subtitle="[dim italic]open-source AI coding agent[/]",
         border_style="bright_cyan",
         padding=(1, 2),
+        title_align="center",
+        subtitle_align="center",
     )
     console.print()
     console.print(panel)
@@ -153,8 +243,9 @@ async def handle_slash_command(
     user_input: str,
     config: AgentConfig,
     agent: Agent,
+    middleware_mgr: MiddlewareManager,
 ) -> str | None:
-    """Handle non-mode slash commands. Returns:
+    """Handle slash commands. Returns:
       - None if not handled (pass through to mode router)
       - "handled" if fully handled (no further processing)
       - "ask:<text>" / "plan:<text>" / "agent:<text>" for one-shot mode routing
@@ -175,6 +266,12 @@ async def handle_slash_command(
         help_table.add_row("/mode <mode>", "Switch default mode (ask | plan | agent)")
         help_table.add_row("/skill", "Manage skills (list | load <name> | unload <name> | reload)")
         help_table.add_row("/mcp", "Manage MCP servers (list | add <name> <cmd> [args] | remove <name>)")
+        help_table.add_row("/plan show", "Show current plan/checklist")
+        help_table.add_row("/plan progress", "Show plan progress bar")
+        help_table.add_row("/plan clear", "Clear the current plan")
+        help_table.add_row("/memory", "List loaded memory files (AGENTS.md, CLAUDE.md, etc.)")
+        help_table.add_row("/memory reload", "Rescan for memory files")
+        help_table.add_row("/memory show", "Preview loaded memory content")
         help_table.add_row("/clear", "Clear conversation history")
         help_table.add_row("/help", "Show this help")
         console.print(help_table)
@@ -201,91 +298,18 @@ async def handle_slash_command(
         console.print()
         return "handled"
 
-    if cmd == "/skill":
-        # Requires the skill_manager to be attached to the agent
-        sm = getattr(agent, '_skill_manager', None)
-        if sm is None:
-            console.print("  Skill system not initialized.", style="dim red")
-        elif rest == "list" or not rest:
-            console.print(f"  {sm.list_formatted()}")
-        elif rest == "reload":
-            sm.rescan()
-            console.print("  Skills rescanned.", style="dim")
-        elif rest.startswith("load "):
-            name = rest[5:].strip()
-            skill = sm.load(name)
-            if skill:
-                agent.system_prompt = MODE_PROMPTS.get(
-                    getattr(agent, '_current_mode', 'agent'), 'agent'
-                ) + sm.get_prompt_additions()
-                console.print(f"  Loaded skill: [bold cyan]{skill.name}[/]")
-            else:
-                console.print(f"  Skill '{name}' not found.", style="dim red")
-        elif rest.startswith("unload "):
-            name = rest[7:].strip()
-            if sm.unload(name):
-                agent.system_prompt = MODE_PROMPTS.get(
-                    getattr(agent, '_current_mode', 'agent'), 'agent'
-                ) + sm.get_prompt_additions()
-                console.print(f"  Unloaded skill: [bold]{name}[/]")
-            else:
-                console.print(f"  Skill '{name}' is not loaded.", style="dim red")
-        else:
-            console.print("  Usage: /skill [list|load <name>|unload <name>|reload]")
-        console.print()
-        return "handled"
-
-    if cmd == "/mcp":
-        mcp_manager: MCPManager | None = getattr(agent, '_mcp_manager', None)
-        if mcp_manager is None:
-            console.print("  MCP system not initialized.", style="dim red")
-            console.print()
+    # Try middleware slash commands
+    mw_result = await middleware_mgr.handle_slash_command(cmd, rest)
+    if mw_result is not None:
+        # Handle async MCP operations
+        if mw_result.startswith("mcp_async:"):
+            mcp_mw = middleware_mgr.get("mcp")
+            if mcp_mw and hasattr(mcp_mw, "handle_async_command"):
+                await mcp_mw.handle_async_command(mw_result[10:])
+                # Refresh tools after MCP changes
+                agent.tools.update(middleware_mgr.collect_tools())
             return "handled"
-
-        if not rest or rest == "list":
-            servers = mcp_manager.connected_servers
-            if not servers:
-                console.print("  No MCP servers connected.", style="dim")
-            else:
-                console.print("  Connected MCP servers:")
-                for s in servers:
-                    console.print(f"  • [bold cyan]{s}[/]")
-        elif rest.startswith("add "):
-            parts = rest[4:].strip().split()
-            if len(parts) < 2:
-                console.print("  Usage: /mcp add <name> <command> [args...]", style="dim red")
-            else:
-                name, command, *args = parts
-                server_config = MCPServerConfig(name=name, command=command, args=args)
-                try:
-                    with console.status(f"[dim]Connecting to MCP server '{name}'...[/]", spinner="dots"):
-                        tools = await mcp_manager.add_server(server_config)
-                    # Update agent tools
-                    agent.tools.update(mcp_manager.get_occ_tools())
-                    # Update configuration persistence
-                    config.mcp_servers.append({"name": name, "command": command, "args": args})
-                    save_config(config)
-                    console.print(f"  Successfully connected to [bold cyan]{name}[/] and loaded {len(tools)} tools.")
-                except Exception as e:
-                    console.print(f"  Failed to connect: {e}", style="bold red")
-        elif rest.startswith("remove "):
-            name = rest[7:].strip()
-            if name in mcp_manager.connected_servers:
-                with console.status(f"[dim]Disconnecting from '{name}'...[/]", spinner="dots"):
-                    await mcp_manager.remove_server(name)
-                # Remove tools gracefully
-                prefix = f"mcp_{name}_"
-                agent.tools = {k: v for k, v in agent.tools.items() if not k.startswith(prefix)}
-                # Update configuration persistence
-                config.mcp_servers = [s for s in config.mcp_servers if s.get("name") != name]
-                save_config(config)
-                console.print(f"  Disconnected and removed server [bold cyan]{name}[/].")
-            else:
-                console.print(f"  Server '{name}' not found.", style="dim red")
-        else:
-            console.print("  Usage: /mcp [list | add <name> <command> [args] | remove <name>]")
-        console.print()
-        return "handled"
+        return mw_result
 
     # One-shot mode commands: /ask <text>, /plan <text>, /agent <text>
     if cmd in ("/ask", "/plan", "/agent") and rest:
@@ -306,6 +330,7 @@ async def run() -> None:
         max_tokens=config.max_tokens,
         api_key=config.api_key,
         base_url=config.base_url,
+        prompt_caching=config.prompt_caching,
     )
 
     # Set up event bus and listeners
@@ -317,53 +342,63 @@ async def run() -> None:
     # Get system prompt for current mode
     system_prompt = MODE_PROMPTS.get(config.mode, MODE_PROMPTS["agent"])
 
-    # Initialize skill manager
-    skill_manager = SkillManager(
+    # Build middleware stack
+    # Order matters: memory first (stable context), then planning, skills, MCP
+    memory_mw = MemoryMiddleware(
+        search_dirs=config.memory_dirs if config.memory_dirs else None
+    )
+    planning_mw = PlanningMiddleware()
+    skills_mw = SkillsMiddleware(
         search_dirs=config.skills_dirs if config.skills_dirs else None
     )
+    mcp_mw = MCPMiddleware(config=config)
 
-    # Initialize MCP manager
-    mcp_manager = MCPManager()
-    
-    # Pre-connect configured MCP servers
-    for s_conf in config.mcp_servers:
-        try:
-            await mcp_manager.add_server(MCPServerConfig(**s_conf))
-        except Exception as e:
-            console.print(f"[bold red]Failed to connect to MCP server {s_conf.get('name')}: {e}[/]")
+    middleware_mgr = MiddlewareManager([memory_mw, planning_mw, skills_mw, mcp_mw])
 
-    # Gather tools (native + skills + MCP)
-    tools = get_tools(skill_manager=skill_manager)
-    tools.update(mcp_manager.get_occ_tools())
+    # Get base tools (without skills — handled by middleware now)
+    tools = get_tools(skill_manager=skills_mw.manager)
 
-    # Create agent
+    # Create agent with middleware
     agent = Agent(
         provider=provider,
         event_bus=event_bus,
         tools=tools,
         system_prompt=system_prompt,
         config=config,
+        middleware_manager=middleware_mgr,
     )
-    # Attach managers for slash command access
-    agent._skill_manager = skill_manager
-    agent._mcp_manager = mcp_manager
 
-    print_splash(config)
+    # Initialize middleware (connects MCP servers, etc.)
+    await agent.initialize()
+
+    # Legacy compat — attach managers for any code that still accesses them
+    agent._skill_manager = skills_mw.manager
+    agent._mcp_manager = mcp_mw.manager
+
+    print_splash(config, middleware_mgr)
 
     session = PromptSession()
 
     try:
         # REPL loop
         while True:
-            # Show mode indicator in prompt
+            # Show mode indicator + plan progress in prompt
             mode_char = {"ask": "?", "plan": "📋", "agent": "❯"}.get(config.mode, "❯")
             pt_style = {"ask": "ansiyellow", "plan": "ansimagenta", "agent": "ansicyan"}.get(
                 config.mode, "ansicyan"
             )
 
+            # Add plan progress to prompt if active
+            plan_hint = ""
+            if planning_mw.store.is_active:
+                done, total = planning_mw.store.progress
+                plan_hint = f" <ansigreen>[{done}/{total}]</ansigreen>"
+
             try:
                 # use prompt_async to play nicely with our async loop
-                user_input = await session.prompt_async(HTML(f"<{pt_style}><b>{mode_char}</b></{pt_style}> "))
+                user_input = await session.prompt_async(
+                    HTML(f"<{pt_style}><b>{mode_char}</b></{pt_style}>{plan_hint} ")
+                )
             except (KeyboardInterrupt, EOFError):
                 console.print("\nGoodbye! 👋", style="dim")
                 return
@@ -374,7 +409,7 @@ async def run() -> None:
 
             # Handle slash commands
             if stripped.startswith("/"):
-                result = await handle_slash_command(stripped, config, agent)
+                result = await handle_slash_command(stripped, config, agent, middleware_mgr)
                 if result == "handled":
                     continue
                 if result and ":" in result:
@@ -388,7 +423,7 @@ async def run() -> None:
             await run_mode(config.mode, agent, stripped)
             console.print()
     finally:
-        await mcp_manager.shutdown()
+        await middleware_mgr.shutdown()
 
 
 def main() -> None:
