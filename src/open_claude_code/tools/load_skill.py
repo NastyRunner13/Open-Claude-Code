@@ -1,5 +1,7 @@
 """Load-skill tool — allows the LLM to load skills at runtime."""
 
+from open_claude_code.tools.result import ToolResult
+
 SCHEMA = {
     "name": "load_skill",
     "description": (
@@ -19,26 +21,29 @@ SCHEMA = {
 }
 
 
-async def load_skill(name: str, _skill_manager=None) -> str:
+async def load_skill(name: str, _skill_manager=None) -> ToolResult:
     """Load a skill by name. The _skill_manager is injected at tool registration time."""
     if _skill_manager is None:
-        return "Error: Skill system not initialized."
+        return ToolResult.fail("Skill system not initialized.", skill_name=name)
 
     skill = _skill_manager.load(name)
     if skill is None:
         available = list(_skill_manager.available.keys())
         if available:
-            return (
-                f"Skill '{name}' not found. Available skills: {', '.join(available)}"
+            return ToolResult.fail(
+                f"Skill '{name}' not found. Available skills: {', '.join(available)}",
+                skill_name=name,
             )
-        return (
+        return ToolResult.fail(
             f"Skill '{name}' not found. No skills are currently available. "
-            "Skills should be placed in ~/.occ/skills/ or .occ/skills/"
+            "Skills should be placed in ~/.occ/skills/ or .occ/skills/",
+            skill_name=name,
         )
 
-    return (
+    return ToolResult.ok(
         f"Skill '{skill.name}' loaded successfully.\n\n"
         f"Description: {skill.description}\n\n"
         f"Instructions have been added to your system prompt. "
-        f"Follow the loaded skill's instructions for future tool calls."
+        f"Follow the loaded skill's instructions for future tool calls.",
+        skill_name=skill.name,
     )

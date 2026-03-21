@@ -3,6 +3,8 @@
 import glob
 import os
 
+from open_claude_code.tools.result import ToolResult
+
 SCHEMA = {
     "name": "find_files",
     "description": (
@@ -28,18 +30,27 @@ SCHEMA = {
 }
 
 
-async def find_files(pattern: str, path: str = ".") -> str:
+async def find_files(pattern: str, path: str = ".") -> ToolResult:
     """Find files matching a glob pattern."""
     try:
         matches = glob.glob(os.path.join(path, pattern), recursive=True)
     except (PermissionError, OSError) as e:
-        return f"Error: {e}"
+        return ToolResult.fail(str(e), pattern=pattern, path=path)
 
     if not matches:
-        return f"No files found matching pattern: {pattern}"
+        return ToolResult.ok(
+            f"No files found matching pattern: {pattern}",
+            pattern=pattern,
+            match_count=0,
+        )
 
     # Sort and limit results
     matches = sorted(matches)
-    if len(matches) > 100:
-        return "\n".join(matches[:100]) + f"\n... and {len(matches) - 100} more files"
-    return "\n".join(matches)
+    total = len(matches)
+    truncated = total > 100
+    if truncated:
+        output = "\n".join(matches[:100]) + f"\n... and {total - 100} more files"
+    else:
+        output = "\n".join(matches)
+
+    return ToolResult.ok(output, pattern=pattern, match_count=total, truncated=truncated)

@@ -4,6 +4,8 @@ import asyncio
 import os
 import tempfile
 
+from open_claude_code.tools.result import ToolResult
+
 MAX_OUTPUT = 10000
 
 SCHEMA = {
@@ -36,10 +38,13 @@ SCHEMA = {
 }
 
 
-async def sandbox(code: str, language: str = "python", timeout: int = 30) -> str:
+async def sandbox(code: str, language: str = "python", timeout: int = 30) -> ToolResult:
     """Run code in an isolated sandbox."""
     if language != "python":
-        return f"Error: unsupported language '{language}'. Currently only 'python' is supported."
+        return ToolResult.fail(
+            f"unsupported language '{language}'. Currently only 'python' is supported.",
+            language=language,
+        )
 
     # Write code to temp file
     with tempfile.NamedTemporaryFile(
@@ -68,19 +73,32 @@ async def sandbox(code: str, language: str = "python", timeout: int = 30) -> str
         except asyncio.TimeoutError:
             process.kill()
             await process.communicate()
-            return f"Sandbox execution timed out after {timeout} seconds"
+            return ToolResult.fail(
+                f"Sandbox execution timed out after {timeout} seconds",
+                language=language,
+                exit_code=-1,
+            )
 
         output = stdout.decode("utf-8", errors="replace")
         err = stderr.decode("utf-8", errors="replace")
-        result = f"Exit code: {process.returncode}\n"
-        if output:
-            result += f"stdout:\n{output}"
-        if err:
-            result += f"stderr:\n{err}"
+        exit_code = process.returncode or 0
 
-        if len(result) > MAX_OUTPUT:
-            return result[:MAX_OUTPUT] + "\n[truncated]"
-        return result
+        result_text = f"Exit code: {exit_code}\n"
+        if output:
+            result_text += f"stdout:\n{output}"
+        if err:
+            result_text += f"stderr:\n{err}"
+
+        truncated = len(result_text) > MAX_OUTPUT
+        if truncated:
+            result_text = result_text[:MAX_OUTPUT] + "\n[truncated]"
+
+        return ToolResult(
+            success=exit_code == 0,
+            data=result_text,
+            error=err.strip() if exit_code != 0 else None,
+            metadata={"language": language, "exit_code": exit_code, "truncated": truncated},
+        )
 
     finally:
         try:

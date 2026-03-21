@@ -3,6 +3,8 @@
 import asyncio
 import os
 
+from open_claude_code.tools.result import ToolResult
+
 MAX_OUTPUT = 10000
 
 SCHEMA = {
@@ -30,7 +32,7 @@ SCHEMA = {
 }
 
 
-async def run_shell(command: str, timeout: int = 60) -> str:
+async def run_shell(command: str, timeout: int = 60) -> ToolResult:
     """Run a shell command and return combined stdout/stderr."""
     # Use cmd.exe on Windows, bash/sh on Unix
     if os.name == "nt":
@@ -51,13 +53,25 @@ async def run_shell(command: str, timeout: int = 60) -> str:
     except asyncio.TimeoutError:
         process.kill()
         await process.communicate()
-        return f"Command timed out after {timeout} seconds"
+        return ToolResult.fail(
+            f"Command timed out after {timeout} seconds",
+            command=command,
+            exit_code=-1,
+        )
 
     output = stdout.decode("utf-8", errors="replace")
     err_output = stderr.decode("utf-8", errors="replace")
     combined = output + err_output
-    result = f"Exit code: {process.returncode}\n{combined}"
+    exit_code = process.returncode or 0
 
-    if len(result) > MAX_OUTPUT:
-        return result[:MAX_OUTPUT] + "\n[truncated]"
-    return result
+    result_text = f"Exit code: {exit_code}\n{combined}"
+    truncated = len(result_text) > MAX_OUTPUT
+    if truncated:
+        result_text = result_text[:MAX_OUTPUT] + "\n[truncated]"
+
+    return ToolResult(
+        success=exit_code == 0,
+        data=result_text,
+        error=err_output.strip() if exit_code != 0 else None,
+        metadata={"command": command, "exit_code": exit_code, "truncated": truncated},
+    )

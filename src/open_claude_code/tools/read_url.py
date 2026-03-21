@@ -2,6 +2,8 @@
 
 import re
 
+from open_claude_code.tools.result import ToolResult
+
 MAX_OUTPUT = 10000
 
 SCHEMA = {
@@ -24,34 +26,40 @@ SCHEMA = {
 }
 
 
-async def read_url(url: str) -> str:
+async def read_url(url: str) -> ToolResult:
     """Fetch URL content and return as cleaned text."""
     try:
         import httpx
     except ImportError:
-        return "Error: httpx package not installed. Run: pip install httpx"
+        return ToolResult.fail(
+            "httpx package not installed. Run: pip install httpx",
+            url=url,
+        )
 
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
             response = await client.get(url)
             response.raise_for_status()
-    except httpx.HTTPStatusError as e:
-        return f"Error: HTTP {e.response.status_code} for {url}"
-    except httpx.RequestError as e:
-        return f"Error fetching URL: {e}"
     except Exception as e:
-        return f"Error: {e}"
+        return ToolResult.fail(str(e), url=url)
 
     content_type = response.headers.get("content-type", "")
-
     if "text/html" in content_type:
         text = _strip_html(response.text)
     else:
         text = response.text
 
-    if len(text) > MAX_OUTPUT:
-        return text[:MAX_OUTPUT] + "\n[truncated]"
-    return text
+    truncated = len(text) > MAX_OUTPUT
+    if truncated:
+        text = text[:MAX_OUTPUT] + "\n[truncated]"
+
+    return ToolResult.ok(
+        text,
+        url=url,
+        status_code=response.status_code,
+        content_type=content_type,
+        truncated=truncated,
+    )
 
 
 def _strip_html(html: str) -> str:

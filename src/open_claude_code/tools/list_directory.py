@@ -2,6 +2,8 @@
 
 import os
 
+from open_claude_code.tools.result import ToolResult
+
 SCHEMA = {
     "name": "list_directory",
     "description": (
@@ -22,15 +24,17 @@ SCHEMA = {
 }
 
 
-async def list_directory(path: str = ".") -> str:
+async def list_directory(path: str = ".") -> ToolResult:
     """List entries in a directory."""
     try:
         entries = sorted(os.listdir(path))
     except (FileNotFoundError, PermissionError, NotADirectoryError) as e:
-        return f"Error: {e}"
+        return ToolResult.fail(str(e), path=path)
 
     result = []
     for entry in entries:
         full = os.path.join(path, entry)
         result.append(entry + "/" if os.path.isdir(full) else entry)
-    return "\n".join(result) if result else "(empty directory)"
+
+    output = "\n".join(result) if result else "(empty directory)"
+    return ToolResult.ok(output, path=path, entry_count=len(entries))

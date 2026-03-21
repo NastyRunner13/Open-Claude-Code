@@ -1,5 +1,7 @@
 """Read file tool."""
 
+from open_claude_code.tools.result import ToolResult
+
 MAX_OUTPUT = 10000
 
 SCHEMA = {
@@ -22,14 +24,16 @@ SCHEMA = {
 }
 
 
-async def read_file(file_path: str) -> str:
+async def read_file(file_path: str) -> ToolResult:
     """Read a file and return its contents."""
     try:
         with open(file_path, encoding="utf-8", errors="replace") as f:
             content = f.read()
     except (FileNotFoundError, PermissionError, IsADirectoryError) as e:
-        return f"Error: {e}"
+        return ToolResult.fail(str(e), file_path=file_path)
 
-    if len(content) > MAX_OUTPUT:
-        return content[:MAX_OUTPUT] + "\n[truncated]"
-    return content
+    truncated = len(content) > MAX_OUTPUT
+    if truncated:
+        content = content[:MAX_OUTPUT] + "\n[truncated]"
+
+    return ToolResult.ok(content, file_path=file_path, truncated=truncated)
