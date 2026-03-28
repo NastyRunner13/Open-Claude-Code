@@ -29,5 +29,5 @@ Thumbs.db
 occ.yml
 .occ/
 
-# uv
-uv.lock
+# Agent / AI
+.gemini/

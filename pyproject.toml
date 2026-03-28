@@ -3,6 +3,24 @@ name = "open-claude-code"
 version = "0.1.0"
 description = "An open-source AI coding agent — multi-model, multi-mode, extensible"
 requires-python = ">=3.12"
+license = {text = "MIT"}
+readme = "README.md"
+authors = [
+    {name = "Prince Gupta"},
+]
+keywords = ["ai", "coding-agent", "cli", "llm", "claude", "openai", "gemini", "mcp"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Topic :: Software Development :: Code Generators",
+    "Typing :: Typed",
+]
 dependencies = [
     "anthropic>=0.40.0",
     "openai>=1.50.0",
@@ -12,6 +30,12 @@ dependencies = [
     "httpx>=0.27.0",
     "prompt-toolkit>=3.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/NastyRunner13/Open-Claude-Code"
+Repository = "https://github.com/NastyRunner13/Open-Claude-Code"
+Issues = "https://github.com/NastyRunner13/Open-Claude-Code/issues"
+Changelog = "https://github.com/NastyRunner13/Open-Claude-Code/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 gemini = ["google-genai>=1.0.0"]

@@ -1,201 +1,507 @@
 <div align="center">
   <h1>⚡ Open Claude Code (OCC)</h1>
-  <p>An open-source, extensible AI coding agent that runs right in your terminal. Works with <b>any LLM</b> — Claude, GPT, Gemini, Groq, Ollama, or any OpenAI-compatible endpoint.</p>
+  <p>
+    <a href="https://pypi.org/project/open-claude-code/"><img src="https://img.shields.io/pypi/v/open-claude-code?color=blue&label=PyPI" alt="PyPI"></a>
+    <a href="https://github.com/NastyRunner13/Open-Claude-Code/actions"><img src="https://img.shields.io/github/actions/workflow/status/NastyRunner13/Open-Claude-Code/ci.yml?label=CI" alt="CI"></a>
+    <img src="https://img.shields.io/pypi/pyversions/open-claude-code?color=green" alt="Python">
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-brightgreen" alt="License"></a>
+  </p>
+  <p><strong>An open-source, model-agnostic AI coding agent that lives in your terminal.</strong></p>
+  <p>Works with <b>Claude</b> · <b>GPT</b> · <b>Gemini</b> · <b>Groq</b> · <b>Ollama</b> · <b>any OpenAI-compatible endpoint</b></p>
 </div>
 
 ---
 
-## ✨ Key Features
+## Why OCC?
 
-- **Multi-Model Support**: Native support for Anthropic, OpenAI, Google Gemini, Groq, and Ollama. Seamlessly switch models or use any OpenAI-compatible custom endpoint.
-- **3 Interaction Modes**: Choose how much autonomy you want. From simple Q&A (`ask`), to review-driven execution (`plan`), to full autonomous tool usage (`agent`).
-- **12 Built-in Tools**: Read/write files, edit surgically, list directories, search via glob or Ripgrep, execute shell commands, perform isolated Python execution, web searches, fetch URLs, and even spawn sub-agents.
-- **Extensible Architecture**: 
-  - **Skills**: Add new prompt-based capabilities at runtime via simple Markdown+YAML files.
-  - **Plugins**: Write Python plugins that hook into the agent's lifecycle (`on_agent_start`, `on_before_send`, etc.).
-- **Model Context Protocol (MCP)**: Directly connect to specialized external tool servers (e.g., GitHub, Filesystem, SQLite) via MCP.
-- **Smart Context Management**: Keeps conversation context within token limits automatically by retaining the most important messages and summarizing the rest.
+Most AI coding tools lock you into a single model, a single IDE, or a proprietary cloud. **Open Claude Code** gives you a fully local, terminal-native coding agent where *you* pick the brain.
+
+- 🧠 **Bring any model** — switch from Claude to GPT-4o to a local Llama with a single flag
+- 🛠️ **12 built-in tools** — file I/O, code search, shell execution, web search, sandboxed Python, and more
+- 🔌 **Extensible by design** — Skills (YAML+Markdown prompts), Python plugins, and MCP tool servers
+- 📋 **3 interaction modes** — Ask (Q&A), Plan (review-then-execute), Agent (full autonomy)
+- 🧩 **Composable middleware** — Memory, Planning, Skills, and MCP each plug in independently
+- ⚡ **Context-aware** — automatic conversation compaction with LLM-powered summarization
 
 ---
 
-## 🚀 Installation & Quick Start
+## Table of Contents
 
-You can install Open Claude Code globally via pip or use it directly with `uv`. Python 3.12+ is required.
+- [Quick Start](#-quick-start)
+- [Model Support](#-model-support)
+- [Interaction Modes](#-interaction-modes)
+- [Built-in Tools](#-built-in-tools)
+- [Extensibility](#-extensibility-skills-plugins--mcp)
+- [Architecture](#-architecture)
+- [Configuration](#%EF%B8%8F-configuration)
+- [Slash Commands](#-slash-commands)
+- [Development](#-development)
+- [Roadmap](#-roadmap)
+- [License](#-license)
+
+---
+
+## 🚀 Quick Start
+
+> **Requires Python 3.12+**
+
+### Install from PyPI
 
 ```bash
-# Install package
 pip install open-claude-code
+```
 
-# Alternatively, run using uv (recommended for dev)
-uv sync
+### Or run from source with [uv](https://docs.astral.sh/uv/) (recommended for development)
 
-# Run out of the box (Defaults to Anthropic; requires ANTHROPIC_API_KEY)
+```bash
+git clone https://github.com/NastyRunner13/Open-Claude-Code.git
+cd Open-Claude-Code
+uv sync        # installs all dependencies
+uv run occ     # launch the agent
+```
+
+### First run
+
+Set your API key and go:
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."   # or OPENAI_API_KEY, GEMINI_API_KEY, etc.
 occ
 ```
 
-### Try different models instantly:
+You'll be greeted with an interactive REPL:
 
-```bash
-occ --model gpt-4o                          # OpenAI
-occ --model gemini-2.0-flash                # Google Gemini
-occ --model groq/llama-3.3-70b-versatile    # Groq
-occ --model ollama/llama3.2                 # Local Ollama
-occ --model my-model --base-url https://custom-api.com/v1  # Any endpoint
+```
+  ⚡ Open Claude Code v0.1.0
+  ┌──────────────────────────────────────────────────┐
+  │    ██████╗   ██████╗  ██████╗                    │
+  │   ██╔═══██╗ ██╔════╝ ██╔════╝                    │
+  │   ██║   ██║ ██║      ██║       claude-sonnet-4   │
+  │   ╚██████╔╝ ╚██████╗ ╚██████╗  ⚡ agent · 16k   │
+  │    ╚═════╝   ╚═════╝  ╚═════╝                    │
+  └──────────────────────────────────────────────────┘
+  ❯ _
 ```
 
 ---
 
-## 🛠️ Interaction Modes
+## 🧠 Model Support
 
-Open Claude Code respects your workflow by providing three distinct interaction modes:
+OCC auto-detects the right provider from the model name. No configuration needed.
 
-| Mode | Symbol | Description | Behavior |
-|------|:---:|-------------|----------|
-| **Ask** | `?` | Direct Q&A | The agent answers your programming questions without using any tools. Fast and cheap. |
-| **Plan** | `📋` | Plan & Review | The agent creates a step-by-step checklist of actions, asks for your review, and executes them one by one. |
-| **Agent** | `❯` | Autonomous | Full agentic mode. The agent iteratively uses tools, assesses results, and solves complex tasks until complete. |
+```bash
+# Anthropic (default)
+occ --model claude-sonnet-4-20250514
 
-*Switch modes on the fly inside the CLI using `/mode [ask|plan|agent]`.*
+# OpenAI
+occ --model gpt-4o
+
+# Google Gemini
+occ --model gemini-2.0-flash
+
+# Groq (blazing fast inference)
+occ --model groq/llama-3.3-70b-versatile
+
+# Local models via Ollama
+occ --model ollama/llama3.2
+
+# Any OpenAI-compatible endpoint (OpenRouter, Together, vLLM, etc.)
+occ --model my-model --base-url https://api.openrouter.ai/v1
+```
+
+### Provider detection logic
+
+| Model prefix | Provider | API Key env var |
+|---|---|---|
+| `claude-*` | Anthropic | `ANTHROPIC_API_KEY` |
+| `gpt-*`, `o1-*`, `o3-*`, `o4-*` | OpenAI | `OPENAI_API_KEY` |
+| `gemini-*` | Google Gemini | `GEMINI_API_KEY` |
+| `groq/*` | Groq | `GROQ_API_KEY` |
+| `ollama/*` | Ollama (local) | — |
+| `--base-url` flag | OpenAI-compatible | `OPENAI_API_KEY` |
+
+---
+
+## 🎯 Interaction Modes
+
+| Mode | Prompt | Description | When to use |
+|------|:---:|-------------|-------------|
+| **Ask** | `?` | Single LLM response, **no tools** | Quick questions, explanations, code reviews |
+| **Plan** | `📋` | Creates a checklist → you review → agent executes | Refactors, multi-file changes, anything you want to verify first |
+| **Agent** | `❯` | Full autonomous loop with tools | Complex tasks, debugging sessions, feature implementation |
+
+Switch modes any time:
+
+```
+❯ /mode plan
+  Mode: agent → plan
+
+📋 Refactor the authentication module into separate files
+  📋 Plan Mode — generating plan for your task...
+```
+
+### Plan Mode workflow
+
+```
+1. 📋 Agent explores codebase and creates a step-by-step plan
+2. 👀 You review: approve (y), reject (n), or provide feedback to refine
+3. ▶  On approval, agent executes each step autonomously
+4. ✅ Reports completion
+```
 
 ---
 
 ## 🧰 Built-in Tools
 
-The agent is equipped with a robust set of tools to interact with your local environment:
+Every tool uses a clean schema that any supported LLM can call:
 
-| Tool | Core Functionality |
-|------|--------------------|
-| `read_file` | Read up to a specific number of lines from a file. |
-| `write_file` | Create new files or overwrite existing ones. |
-| `edit_file` | Make surgical string replacements in existing files. |
-| `list_directory` | Explore directories and list their contents. |
-| `find_files` | Search for files by glob pattern. |
-| `grep_search` | Ripgrep-powered lightning-fast code search. |
-| `run_shell` | Execute arbitrary shell commands (safely prompted). |
-| `web_search` | Search the web natively using DuckDuckGo. |
-| `read_url` | Fetch and parse web pages to markdown context. |
-| `sandbox` | Execute Python snippets in an isolated environment. |
-| `spawn_agent` | Spin up parallel sub-agents for concurrent tasks. |
-| `load_skill` | Dynamically import skills to expand prompt instructions. |
+| Tool | Description | Auto-approved |
+|------|-------------|:---:|
+| `read_file` | Read file contents (with line limits) | ✅ |
+| `write_file` | Create new files or overwrite existing ones | ❌ |
+| `edit_file` | Surgical string replacement (old → new, must be unique) | ❌ |
+| `list_directory` | List directory contents with metadata | ✅ |
+| `find_files` | Glob-based file search | ✅ |
+| `grep_search` | Ripgrep-powered code search with context lines | ✅ |
+| `run_shell` | Execute shell commands with output capture | ❌ |
+| `web_search` | Search the web via DuckDuckGo | ✅ |
+| `read_url` | Fetch and parse web pages to markdown | ✅ |
+| `sandbox` | Execute Python code in an isolated subprocess | ❌ |
+| `spawn_agent` | Spawn parallel sub-agents for concurrent tasks | ❌ |
+| `load_skill` | Dynamically load skills to extend prompts | ✅ |
+
+> **Auto-approved** tools run without prompting you. Configure this in `occ.yml` via `auto_approve`.
 
 ---
 
 ## 🔌 Extensibility (Skills, Plugins, & MCP)
 
-### 1. Skills (Prompt Engineering)
-You can teach the agent new workflows by dropping a `SKILL.md` file into `.occ/skills/my-skill/`.
-```yaml
----
-name: GitHub PR Review
-description: Best practices for reviewing PRs
----
-When asked to review a PR, always check for test coverage and proper typing...
-```
-*Load it by typing `/skill load GitHub PR Review` in the CLI.*
+OCC is designed to be extended in three ways, from simplest to most powerful:
 
-### 2. Plugins (Python Lifecycle Hooks)
-Need programmatic extension? Write standard Python plugins. Place them in `.occ/plugins/my-plugin/plugin.py`:
+### 1. 📝 Skills — Prompt Extensions
+
+Teach the agent new workflows by dropping a `SKILL.md` file into a skills directory. Skills are Markdown files with YAML frontmatter:
+
+```yaml
+# .occ/skills/pr-review/SKILL.md
+---
+name: PR Review Expert
+description: Best practices for reviewing pull requests
+---
+
+When asked to review a PR, follow this workflow:
+1. Check for test coverage — every changed function needs tests
+2. Look for security issues — SQL injection, XSS, unvalidated inputs
+3. Verify types — ensure all public functions have type annotations
+4. Review naming — clear, descriptive names over abbreviations
+```
+
+```
+❯ /skill load PR Review Expert
+  Loaded skill: PR Review Expert
+```
+
+### 2. 🐍 Plugins — Python Lifecycle Hooks
+
+For programmatic extensions, write Python plugins with hooks into the agent lifecycle:
+
 ```python
+# .occ/plugins/my-logger/plugin.py
 PLUGIN_NAME = "Custom Logger"
 
 def register(hooks):
-    async def log_tool(tool_name, **kwargs):
-        print(f"Agent just used: {tool_name}")
-    hooks.on_tool_result(log_tool)
+    async def on_tool_used(tool_name, **kwargs):
+        print(f"🔧 Tool called: {tool_name}")
+
+    hooks.on_tool_result(on_tool_used)
 ```
 
-### 3. Model Context Protocol (MCP)
-Extend the agent with external standardized tools (e.g., database clients, specialized APIs). Add to your `occ.yml`:
+### 3. 🌐 MCP — Model Context Protocol
+
+Connect external tool servers that speak the [Model Context Protocol](https://modelcontextprotocol.io/) standard:
+
 ```yaml
+# In occ.yml
+mcp_servers:
+  - name: filesystem
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"]
+
+  - name: github
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-github"]
+    env:
+      GITHUB_TOKEN: "ghp_..."
+```
+
+Manage servers at runtime:
+
+```
+❯ /mcp list
+  Connected MCP servers:
+  • filesystem
+  • github
+
+❯ /mcp add sqlite npx -y @modelcontextprotocol/server-sqlite ./mydb.sqlite
+  Successfully connected to sqlite and loaded 5 tools.
+```
+
+---
+
+## 🏗 Architecture
+
+OCC follows a clean, modular architecture with clear separation of concerns:
+
+```
+src/open_claude_code/
+├── agent.py              # Core agent loop (no UI, pure logic + EventBus)
+├── main.py               # CLI entry point, REPL, slash command routing
+├── config.py             # YAML + env + CLI cascading configuration
+├── context.py            # Token tracking + LLM-powered conversation compaction
+├── modes.py              # Ask / Plan / Agent mode implementations
+├── system_prompt.py      # Per-mode system prompts
+│
+├── providers/            # LLM provider abstraction layer
+│   ├── base.py           # Provider protocol + response types
+│   ├── registry.py       # Auto-detection factory (model name → provider)
+│   ├── anthropic.py      # Claude (with prompt caching + extended thinking)
+│   ├── openai.py         # GPT, o1, o3, o4, any OpenAI-compatible
+│   ├── gemini.py         # Google Gemini via google-genai
+│   ├── groq.py           # Groq cloud inference
+│   └── ollama.py         # Local models via Ollama
+│
+├── tools/                # Tool definitions (schema + implementation)
+│   ├── read_file.py      # File reading with line limits
+│   ├── write_file.py     # File creation with parent dir auto-creation
+│   ├── edit_file.py      # Surgical search-and-replace editing
+│   ├── grep_search.py    # Ripgrep-powered code search
+│   ├── find_files.py     # Glob-based file finding
+│   ├── list_directory.py # Directory listing with metadata
+│   ├── run_shell.py      # Shell command execution
+│   ├── web_search.py     # DuckDuckGo web search
+│   ├── read_url.py       # URL fetching + HTML→markdown conversion
+│   ├── sandbox.py        # Isolated Python execution
+│   ├── spawn_agent.py    # Sub-agent spawning for parallelism
+│   ├── load_skill.py     # Runtime skill loading
+│   └── result.py         # Structured ToolResult type
+│
+├── middleware/            # Composable feature injection
+│   ├── __init__.py       # Middleware base class + MiddlewareManager
+│   ├── mcp.py            # MCP server lifecycle + tool aggregation
+│   ├── memory.py         # AGENTS.md / CLAUDE.md context file loading
+│   └── skills.py         # Skill discovery + prompt injection
+│
+├── events/               # Event-driven architecture (decouples agent from UI)
+│   ├── bus.py            # EventBus with typed event routing
+│   └── types.py          # Event types (Thinking, PreToolUse, PostToolUse, etc.)
+│
+├── listeners/            # Event handlers (UI rendering, approval gates, logging)
+│   ├── ui.py             # Rich-based terminal UI
+│   ├── approval.py       # Tool approval prompts (y/n)
+│   └── logging.py        # File-based logging
+│
+├── planning/             # Plan mode implementation
+│   ├── middleware.py      # Planning middleware (tools + prompt additions)
+│   ├── store.py          # Checklist state management
+│   └── tools.py          # write_plan, update_plan, read_plan tools
+│
+├── skills/               # Skill discovery and management
+├── plugins/              # Plugin system with lifecycle hooks
+├── subagents/            # Sub-agent spawning and management
+└── mcp/                  # MCP client (server process management + tool bridging)
+```
+
+### Key design decisions
+
+- **Event-driven core** — The agent loop (`agent.py`) contains zero UI code. Everything flows through the `EventBus`, making it trivial to swap the UI or run headlessly.
+- **Composable middleware** — Each feature (MCP, Skills, Memory, Planning) is a `Middleware` subclass that independently injects tools, extends prompts, and hooks into lifecycle events.
+- **Provider abstraction** — All LLM providers implement the same `Provider` protocol, making model-switching a one-line change.
+- **Structured tool results** — Every tool returns a `ToolResult` with success/failure status and metadata, not raw strings.
+
+---
+
+## ⚙️ Configuration
+
+OCC uses a cascading configuration system. Priority order:
+
+**CLI flags** → **Environment variables** → **Config file** (`occ.yml` / `.occ/config.yml`)
+
+### Environment Variables
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+export OPENAI_API_KEY="sk-..."
+export GEMINI_API_KEY="..."
+export GROQ_API_KEY="gsk_..."
+export OCC_MODEL="gpt-4o"    # Override default model
+```
+
+### Config File (`occ.yml`)
+
+```yaml
+# Model configuration
+model: "claude-sonnet-4-20250514"
+max_tokens: 16000
+
+# Mode: ask | plan | agent
+mode: "agent"
+
+# Safety
+skip_approval: false          # true = auto-approve ALL tool calls (dangerous!)
+auto_approve:                 # Tools that skip the approval prompt
+  - read_file
+  - list_directory
+  - find_files
+  - grep_search
+  - web_search
+  - read_url
+  - load_skill
+
+# Prompt caching (Anthropic only — up to 90% cost reduction)
+prompt_caching: true
+
+# Context management
+max_context_tokens: 100000
+context_compaction: true
+
+# Extension directories
+skills_dirs:
+  - "~/.occ/skills"
+  - ".occ/skills"
+
+plugins_dirs:
+  - "~/.occ/plugins"
+  - ".occ/plugins"
+
+# MCP servers
 mcp_servers:
   - name: filesystem
     command: "npx"
     args: ["-y", "@modelcontextprotocol/server-filesystem", "."]
 ```
 
----
+> A fully annotated example is included in [`occ.example.yml`](occ.example.yml).
 
-## ⚙️ Configuration 
+### CLI Flags
 
-`occ` uses a cascading configuration system. Order of priority: 
-**CLI Flags** → **Environment Variables** → **`occ.yml` / `.occ/config.yml`**
-
-**Environment Variables:**
 ```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
-export OPENAI_API_KEY="sk-..."
-export GEMINI_API_KEY="..."
-export GROQ_API_KEY="gsk_..."
-```
-
-**Example `occ.yml` Configuration:**
-```yaml
-model: "claude-3-7-sonnet-20250219"
-max_tokens: 16000
-mode: "agent"
-skip_approval: false   # Set to true for fully unattended runs
-auto_approve:
-  - read_file
-  - list_directory
-  - grep_search
+occ --model gpt-4o           # Override model
+occ --mode plan               # Start in plan mode
+occ --max-tokens 32000        # Increase response length
+occ --skip-approval            # Auto-approve all tools (caution!)
+occ --api-key sk-...           # Pass API key directly
+occ --base-url https://...    # Custom endpoint
+occ --config ./my-config.yml  # Custom config path
 ```
 
 ---
 
 ## 💬 Slash Commands
 
-Inside the interactive REPL, use these slash commands to control the agent:
+Inside the interactive REPL:
 
 | Command | Description |
 |---------|-------------|
-| `/ask <query>` | Quick answer (forces `ask` mode for one turn) |
-| `/plan <task>` | Plan & Execute (forces `plan` mode for one turn) |
-| `/agent <task>` | Full Autonomous (forces `agent` mode for one turn) |
-| `/mode [ask\|plan\|agent]` | Show current mode or switch default mode |
-| `/skill` | Manage skills (`list`, `load <name>`, `unload <name>`) |
-| `/mcp` | Manage MCP servers (`list`, `add`, `remove`) |
-| `/plan [cmd]` | Manage current checklist (`show`, `progress`, `clear`) |
-| `/memory` | Manage context files (`/memory reload`, `/memory show`) |
-| `/clear` | Clear conversation history and context window |
-| `/help` | Display the help menu |
+| `/ask <query>` | Force ask mode for one turn (no tools) |
+| `/plan <task>` | Force plan mode for one turn (plan → approve → execute) |
+| `/agent <task>` | Force agent mode for one turn (full autonomy) |
+| `/mode [ask\|plan\|agent]` | Show or switch the default interaction mode |
+| `/skill [list\|load\|unload\|reload]` | Manage prompt-based skills |
+| `/mcp [list\|add\|remove]` | Manage MCP servers at runtime |
+| `/plan [show\|progress\|clear]` | Manage the current plan/checklist |
+| `/memory` | List loaded memory files (`AGENTS.md`, `CLAUDE.md`, etc.) |
+| `/memory reload` | Rescan and reload memory files |
+| `/memory show` | Preview loaded memory content |
+| `/clear` | Clear conversation history |
+| `/help` | Show command reference |
 
 ---
 
-## 🏗 Architecture Focus
+## 🧪 Development
 
-The codebase is highly modular and organized in `src/open_claude_code/`:
-- **`agent.py`**: The core autonomous loop.
-- **`middleware/`**: Modular systems (MCP, Memory, Skills) evaluated in sequence.
-- **`tools/`**: Tool definitions and payload schemas.
-- **`providers/`**: LLM-agnostic provider wrappers.
-- **`context.py`**: Smart conversation token tracking and compactor logic.
-- **`modes.py` & `system_prompt.py`**: Mode routing strings and persona definitions.
+### Prerequisites
+
+- Python 3.12+
+- [uv](https://docs.astral.sh/uv/) (recommended) or pip
+
+### Setup
+
+```bash
+git clone https://github.com/NastyRunner13/Open-Claude-Code.git
+cd Open-Claude-Code
+uv sync              # Install all dependencies including dev
+```
+
+### Run Tests
+
+```bash
+uv run pytest tests/ -v
+```
+
+The test suite includes **200+ tests** covering:
+- Agent loop and tool dispatch
+- Configuration loading and cascading
+- Event bus routing and listeners
+- Context compaction and token estimation
+- Mode routing (ask, plan, agent)
+- Middleware lifecycle and composition
+- Memory file discovery and caching
+- Planning tools and checklist management
+- Provider registry and auto-detection
+- Individual tool implementations
+- Structured ToolResult handling
+
+### Run Locally
+
+```bash
+uv run occ
+```
+
+### Build for Distribution
+
+```bash
+uv build    # Produces .whl and .tar.gz in dist/
+```
+
+### Docker
+
+```bash
+docker build -t occ .
+docker run -it -e ANTHROPIC_API_KEY=sk-ant-... occ
+```
 
 ---
 
-## 📦 Local Development & Contributing
+## 🗺 Roadmap
 
-Contributions are highly welcome! To set up the project locally:
+Here are features and improvements planned for future releases:
 
-1. **Clone & Install**
-   ```bash
-   git clone https://github.com/your-username/OpenClaudeCode.git
-   cd OpenClaudeCode
-   uv sync
-   ```
+- [ ] **Git integration** — automatic staging, committing, branching, and PR creation
+- [ ] **File snapshots & undo** — snapshot files before edits for easy rollback
+- [ ] **Streaming responses** — token-by-token streaming for faster feedback
+- [ ] **IDE integration** — VS Code extension and Language Server Protocol support
+- [ ] **Persistent memory** — learn project conventions, build commands, and preferences across sessions
+- [ ] **Hooks system** — pre/post shell hooks for custom automation (linting, formatting, etc.)
+- [ ] **Session export** — export conversation history to Markdown or JSON
+- [ ] **Multi-agent orchestration** — coordinate multiple agents on different parts of a codebase
+- [ ] **Diff-based editing** — apply unified diffs instead of string replacement for complex edits
+- [ ] **Cost tracking** — real-time token usage and spending dashboard
 
-2. **Run Tests**
-   ```bash
-   uv run pytest tests/ -v
-   ```
-
-3. **Run the CLI locally**
-   ```bash
-   uv run occ
-   ```
+See the [improvement analysis](https://github.com/NastyRunner13/Open-Claude-Code/blob/main/IMPROVEMENTS.md) for a detailed comparison with Claude Code and other agents.
 
 ---
 
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE).
+
+---
+
+<div align="center">
+  <p><strong>Built with ❤️ by <a href="https://github.com/NastyRunner13">Prince Gupta</a></strong></p>
+  <p>
+    <a href="https://github.com/NastyRunner13/Open-Claude-Code/stargazers">⭐ Star this repo</a> ·
+    <a href="https://github.com/NastyRunner13/Open-Claude-Code/issues">🐛 Report a bug</a> ·
+    <a href="https://github.com/NastyRunner13/Open-Claude-Code/issues">💡 Request a feature</a>
+  </p>
+</div>
