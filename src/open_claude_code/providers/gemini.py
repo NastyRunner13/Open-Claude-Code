@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
+
+from collections.abc import AsyncIterator
 
 from .base import (
     Provider,
     ProviderError,
     ProviderResponse,
+    StreamEvent,
     TextBlock,
     ThinkingBlock,
     ToolUseBlock,
@@ -20,7 +24,6 @@ def _anthropic_tools_to_gemini(tools: list[dict]) -> list[dict]:
     declarations = []
     for tool in tools:
         schema = tool.get("input_schema", {"type": "object", "properties": {}})
-        # Gemini doesn't support 'default' in parameter schemas — strip them
         cleaned = _strip_defaults(schema)
         declarations.append({
             "name": tool["name"],
@@ -52,7 +55,6 @@ def _convert_messages(messages: list[dict]) -> list[dict]:
         role = msg["role"]
         content = msg["content"]
 
-        # Map roles: Anthropic user/assistant → Gemini user/model
         gemini_role = "model" if role == "assistant" else "user"
 
         if isinstance(content, str):
@@ -83,7 +85,6 @@ def _convert_messages(messages: list[dict]) -> list[dict]:
                                 "response": {"result": block.get("content", "")},
                             }
                         })
-                    # Skip thinking blocks
 
             if parts:
                 contents.append({"role": gemini_role, "parts": parts})
@@ -117,6 +118,31 @@ class GeminiProvider(Provider):
     def model_name(self) -> str:
         return self.model
 
+    def _build_config_and_contents(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        system_prompt: str,
+    ) -> tuple:
+        """Build config and contents shared by send() and stream()."""
+        from google.genai import types
+
+        config: dict = {
+            "system_instruction": system_prompt,
+            "max_output_tokens": self.max_tokens,
+        }
+
+        if tools:
+            declarations = _anthropic_tools_to_gemini(tools)
+            config["tools"] = [types.Tool(
+                function_declarations=[
+                    types.FunctionDeclaration(**d) for d in declarations
+                ]
+            )]
+
+        contents = _convert_messages(messages)
+        return types.GenerateContentConfig(**config), contents
+
     async def send(
         self,
         messages: list[dict],
@@ -125,33 +151,15 @@ class GeminiProvider(Provider):
     ) -> ProviderResponse:
         """Send messages to Gemini API and return normalized response."""
         try:
-            from google.genai import types
+            config, contents = self._build_config_and_contents(
+                messages, tools, system_prompt
+            )
 
-            # Build config
-            config: dict = {
-                "system_instruction": system_prompt,
-                "max_output_tokens": self.max_tokens,
-            }
-
-            # Add tools if present
-            if tools:
-                declarations = _anthropic_tools_to_gemini(tools)
-                config["tools"] = [types.Tool(
-                    function_declarations=[
-                        types.FunctionDeclaration(**d) for d in declarations
-                    ]
-                )]
-
-            # Convert messages
-            contents = _convert_messages(messages)
-
-            # Call the API (synchronous — run in thread)
-            import asyncio
             response = await asyncio.to_thread(
                 self.client.models.generate_content,
                 model=self.model,
                 contents=contents,
-                config=types.GenerateContentConfig(**config),
+                config=config,
             )
 
         except ProviderError:
@@ -159,7 +167,6 @@ class GeminiProvider(Provider):
         except Exception as e:
             raise ProviderError(str(e)) from e
 
-        # Parse response
         content: list[TextBlock | ToolUseBlock] = []
         thinking: ThinkingBlock | None = None
 
@@ -170,7 +177,6 @@ class GeminiProvider(Provider):
                     content.append(TextBlock(text=part.text))
                 elif hasattr(part, "function_call") and part.function_call:
                     fc = part.function_call
-                    # Convert args to dict
                     args = dict(fc.args) if fc.args else {}
                     content.append(ToolUseBlock(
                         id=f"gemini_{uuid.uuid4().hex[:8]}",
@@ -183,8 +189,105 @@ class GeminiProvider(Provider):
                         signature="",
                     )
 
-        # Fallback: if response has text attribute directly
         if not content and hasattr(response, "text") and response.text:
             content.append(TextBlock(text=response.text))
 
         return ProviderResponse(thinking=thinking, content=content)
+
+    async def stream(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        system_prompt: str,
+    ) -> AsyncIterator[StreamEvent]:
+        """Stream response tokens from Gemini using generate_content_stream."""
+        try:
+            config, contents = self._build_config_and_contents(
+                messages, tools, system_prompt
+            )
+        except ProviderError:
+            raise
+        except Exception as e:
+            raise ProviderError(str(e)) from e
+
+        text_parts: list[str] = []
+        tool_blocks: list[ToolUseBlock] = []
+
+        try:
+            # Gemini's streaming is synchronous — run in thread with queue
+            import queue
+
+            q: queue.Queue = queue.Queue()
+
+            def _stream_in_thread() -> None:
+                try:
+                    for chunk in self.client.models.generate_content_stream(
+                        model=self.model,
+                        contents=contents,
+                        config=config,
+                    ):
+                        q.put(("chunk", chunk))
+                    q.put(("done", None))
+                except Exception as e:
+                    q.put(("error", e))
+
+            loop = asyncio.get_event_loop()
+            loop.run_in_executor(None, _stream_in_thread)
+
+            while True:
+                # Poll the queue with async sleep to avoid blocking
+                try:
+                    msg_type, data = await asyncio.to_thread(q.get, timeout=30)
+                except Exception:
+                    break
+
+                if msg_type == "error":
+                    raise ProviderError(str(data)) from data
+                if msg_type == "done":
+                    break
+
+                chunk = data
+                if chunk.candidates:
+                    candidate = chunk.candidates[0]
+                    if candidate.content and candidate.content.parts:
+                        for part in candidate.content.parts:
+                            if hasattr(part, "text") and part.text:
+                                text_parts.append(part.text)
+                                yield StreamEvent(type="text_delta", text=part.text)
+                            elif hasattr(part, "function_call") and part.function_call:
+                                fc = part.function_call
+                                args = dict(fc.args) if fc.args else {}
+                                tool_id = f"gemini_{uuid.uuid4().hex[:8]}"
+                                tool_blocks.append(ToolUseBlock(
+                                    id=tool_id,
+                                    name=fc.name,
+                                    input=args,
+                                ))
+                                yield StreamEvent(
+                                    type="tool_use_start",
+                                    tool_name=fc.name,
+                                    tool_id=tool_id,
+                                )
+                                yield StreamEvent(
+                                    type="tool_use_end",
+                                    tool_name=fc.name,
+                                    tool_id=tool_id,
+                                    tool_input=args,
+                                )
+
+        except ProviderError:
+            raise
+        except Exception as e:
+            raise ProviderError(str(e)) from e
+
+        # Build final response
+        content: list[TextBlock | ToolUseBlock] = []
+        full_text = "".join(text_parts)
+        if full_text:
+            content.append(TextBlock(text=full_text))
+        content.extend(tool_blocks)
+
+        yield StreamEvent(
+            type="done",
+            response=ProviderResponse(thinking=None, content=content),
+        )
