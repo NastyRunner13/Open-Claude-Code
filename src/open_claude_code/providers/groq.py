@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import os
 
-from .base import Provider, ProviderError, ProviderResponse
+from collections.abc import AsyncIterator
+
+from .base import Provider, ProviderError, ProviderResponse, StreamEvent
 from .openai import OpenAIProvider
 
 
@@ -21,14 +23,12 @@ class GroqProvider(Provider):
         max_tokens: int = 16000,
         api_key: str | None = None,
     ) -> None:
-        # Strip "groq/" prefix if present (e.g., "groq/llama-3.3-70b-versatile")
         if model.startswith("groq/"):
             model = model[5:]
 
         self.model = model
         self.max_tokens = max_tokens
 
-        # Groq uses its own API key
         resolved_key = api_key or os.environ.get("GROQ_API_KEY")
         if not resolved_key:
             raise ProviderError(
@@ -36,7 +36,6 @@ class GroqProvider(Provider):
                 "or pass --api-key."
             )
 
-        # Use OpenAI provider pointed at Groq endpoint
         self._inner = OpenAIProvider(
             model=model,
             max_tokens=max_tokens,
@@ -56,3 +55,13 @@ class GroqProvider(Provider):
     ) -> ProviderResponse:
         """Delegate to the inner OpenAI-compatible provider."""
         return await self._inner.send(messages, tools, system_prompt)
+
+    async def stream(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        system_prompt: str,
+    ) -> AsyncIterator[StreamEvent]:
+        """Delegate streaming to the inner OpenAI-compatible provider."""
+        async for event in self._inner.stream(messages, tools, system_prompt):
+            yield event

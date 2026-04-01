@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-import uuid
+import json
+
+from collections.abc import AsyncIterator
 
 from openai import AsyncOpenAI
 
@@ -10,6 +12,7 @@ from .base import (
     Provider,
     ProviderError,
     ProviderResponse,
+    StreamEvent,
     TextBlock,
     ThinkingBlock,
     ToolUseBlock,
@@ -32,13 +35,7 @@ def _anthropic_tools_to_openai(tools: list[dict]) -> list[dict]:
 
 
 def _convert_messages(messages: list[dict]) -> list[dict]:
-    """Convert Anthropic-style messages to OpenAI format.
-
-    Key differences:
-      - Anthropic uses tool_result blocks in user messages; OpenAI uses role=tool messages
-      - Anthropic tool_use blocks become assistant tool_calls
-      - Thinking blocks are stripped (OpenAI doesn't have them in history)
-    """
+    """Convert Anthropic-style messages to OpenAI format."""
     converted = []
     for msg in messages:
         role = msg["role"]
@@ -49,7 +46,6 @@ def _convert_messages(messages: list[dict]) -> list[dict]:
             continue
 
         if isinstance(content, list):
-            # Check if this is a tool_result message
             if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "tool_result":
@@ -60,7 +56,6 @@ def _convert_messages(messages: list[dict]) -> list[dict]:
                         })
                 continue
 
-            # Assistant message with possible tool_use and thinking
             if role == "assistant":
                 text_parts = []
                 tool_calls = []
@@ -70,7 +65,6 @@ def _convert_messages(messages: list[dict]) -> list[dict]:
                         if block.get("type") == "text":
                             text_parts.append(block["text"])
                         elif block.get("type") == "tool_use":
-                            import json
                             tool_calls.append({
                                 "id": block["id"],
                                 "type": "function",
@@ -79,7 +73,6 @@ def _convert_messages(messages: list[dict]) -> list[dict]:
                                     "arguments": json.dumps(block["input"]),
                                 },
                             })
-                        # Skip thinking blocks
 
                 msg_dict: dict = {"role": "assistant"}
                 msg_dict["content"] = "\n".join(text_parts) if text_parts else None
@@ -88,7 +81,6 @@ def _convert_messages(messages: list[dict]) -> list[dict]:
                 converted.append(msg_dict)
                 continue
 
-            # User message with mixed content
             text_parts = []
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "text":
@@ -100,10 +92,7 @@ def _convert_messages(messages: list[dict]) -> list[dict]:
 
 
 class OpenAIProvider(Provider):
-    """OpenAI provider — GPT-4o, o1, o3, and any OpenAI-compatible endpoint.
-
-    Also works with OpenRouter, Together AI, Fireworks, etc. by setting base_url.
-    """
+    """OpenAI provider — GPT-4o, o1, o3, and any OpenAI-compatible endpoint."""
 
     def __init__(
         self,
@@ -125,6 +114,28 @@ class OpenAIProvider(Provider):
     def model_name(self) -> str:
         return self.model
 
+    def _build_kwargs(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        system_prompt: str,
+    ) -> dict:
+        """Build the kwargs dict shared by send() and stream()."""
+        openai_messages = [{"role": "system", "content": system_prompt}]
+        openai_messages.extend(_convert_messages(messages))
+
+        kwargs: dict = {
+            "model": self.model,
+            "messages": openai_messages,
+            "max_completion_tokens": self.max_tokens,
+        }
+
+        if tools:
+            kwargs["tools"] = _anthropic_tools_to_openai(tools)
+            kwargs["tool_choice"] = "auto"
+
+        return kwargs
+
     async def send(
         self,
         messages: list[dict],
@@ -133,21 +144,8 @@ class OpenAIProvider(Provider):
     ) -> ProviderResponse:
         """Send messages to OpenAI API and return normalized response."""
         try:
-            openai_messages = [{"role": "system", "content": system_prompt}]
-            openai_messages.extend(_convert_messages(messages))
-
-            kwargs: dict = {
-                "model": self.model,
-                "messages": openai_messages,
-                "max_completion_tokens": self.max_tokens,
-            }
-
-            if tools:
-                kwargs["tools"] = _anthropic_tools_to_openai(tools)
-                kwargs["tool_choice"] = "auto"
-
+            kwargs = self._build_kwargs(messages, tools, system_prompt)
             response = await self.client.chat.completions.create(**kwargs)
-
         except Exception as e:
             raise ProviderError(str(e)) from e
 
@@ -155,7 +153,6 @@ class OpenAIProvider(Provider):
         message = choice.message
         content: list[TextBlock | ToolUseBlock] = []
 
-        # Extract reasoning/thinking if present (o1/o3 models)
         thinking: ThinkingBlock | None = None
         if hasattr(message, "reasoning_content") and message.reasoning_content:
             thinking = ThinkingBlock(
@@ -163,13 +160,10 @@ class OpenAIProvider(Provider):
                 signature="",
             )
 
-        # Text content
         if message.content:
             content.append(TextBlock(text=message.content))
 
-        # Tool calls
         if message.tool_calls:
-            import json
             for tc in message.tool_calls:
                 try:
                     args = json.loads(tc.function.arguments)
@@ -183,3 +177,91 @@ class OpenAIProvider(Provider):
                 ))
 
         return ProviderResponse(thinking=thinking, content=content)
+
+    async def stream(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        system_prompt: str,
+    ) -> AsyncIterator[StreamEvent]:
+        """Stream response tokens from OpenAI using server-sent events."""
+        try:
+            kwargs = self._build_kwargs(messages, tools, system_prompt)
+            kwargs["stream"] = True
+            response = await self.client.chat.completions.create(**kwargs)
+        except Exception as e:
+            raise ProviderError(str(e)) from e
+
+        text_parts: list[str] = []
+        tool_calls_acc: dict[int, dict] = {}
+
+        try:
+            async for chunk in response:
+                if not chunk.choices:
+                    continue
+
+                delta = chunk.choices[0].delta
+
+                if delta.content:
+                    text_parts.append(delta.content)
+                    yield StreamEvent(type="text_delta", text=delta.content)
+
+                if delta.tool_calls:
+                    for tc_delta in delta.tool_calls:
+                        idx = tc_delta.index
+                        if idx not in tool_calls_acc:
+                            tool_calls_acc[idx] = {
+                                "id": tc_delta.id or "",
+                                "name": "",
+                                "arguments": "",
+                            }
+                            if tc_delta.function and tc_delta.function.name:
+                                tool_calls_acc[idx]["name"] = tc_delta.function.name
+                                yield StreamEvent(
+                                    type="tool_use_start",
+                                    tool_name=tc_delta.function.name,
+                                    tool_id=tc_delta.id or "",
+                                )
+
+                        if tc_delta.id:
+                            tool_calls_acc[idx]["id"] = tc_delta.id
+                        if tc_delta.function:
+                            if tc_delta.function.name:
+                                tool_calls_acc[idx]["name"] = tc_delta.function.name
+                            if tc_delta.function.arguments:
+                                tool_calls_acc[idx]["arguments"] += tc_delta.function.arguments
+                                yield StreamEvent(
+                                    type="input_json_delta",
+                                    text=tc_delta.function.arguments,
+                                )
+
+        except Exception as e:
+            raise ProviderError(str(e)) from e
+
+        content: list[TextBlock | ToolUseBlock] = []
+        full_text = "".join(text_parts)
+        if full_text:
+            content.append(TextBlock(text=full_text))
+
+        for tc_data in tool_calls_acc.values():
+            try:
+                args = json.loads(tc_data["arguments"]) if tc_data["arguments"] else {}
+            except json.JSONDecodeError:
+                args = {"raw": tc_data["arguments"]}
+
+            content.append(ToolUseBlock(
+                id=tc_data["id"],
+                name=tc_data["name"],
+                input=args,
+            ))
+            yield StreamEvent(
+                type="tool_use_end",
+                tool_name=tc_data["name"],
+                tool_id=tc_data["id"],
+                tool_input=args,
+            )
+
+        yield StreamEvent(
+            type="done",
+            response=ProviderResponse(thinking=None, content=content),
+        )

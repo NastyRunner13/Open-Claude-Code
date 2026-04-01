@@ -63,3 +63,28 @@ class Error:
     """Emitted when an error occurs."""
     message: str
     recoverable: bool = True
+
+
+# ── Streaming events ───────────────────────────────────────────────
+
+@dataclass
+class StreamStart:
+    """Emitted when the model begins streaming a response."""
+
+
+@dataclass
+class StreamTextDelta:
+    """Emitted for each incremental text token from the stream."""
+    text: str
+
+
+@dataclass
+class StreamThinkingDelta:
+    """Emitted for each incremental thinking/reasoning token."""
+    text: str
+
+
+@dataclass
+class StreamEnd:
+    """Emitted when streaming is complete."""
+    full_text: str
