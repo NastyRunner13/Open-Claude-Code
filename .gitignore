@@ -6,6 +6,7 @@ __pycache__/
 dist/
 build/
 *.egg
+pytest_temp
 
 # Virtual environments
 .venv/
@@ -25,9 +26,11 @@ Thumbs.db
 # Logs
 *.log
 
-# Config with secrets
+# Config with secrets~
 occ.yml
 .occ/
 
 # Agent / AI
 .gemini/
+
+IMPROVEMENTS.md
