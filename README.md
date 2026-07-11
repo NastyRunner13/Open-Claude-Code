@@ -16,8 +16,11 @@
 
 Most AI coding tools lock you into a single model, a single IDE, or a proprietary cloud. **Open Claude Code** gives you a fully local, terminal-native coding agent where *you* pick the brain.
 
+- **Capability-first safety** — non-bypassable tool policy, workspace roots, shell controls, and read-only subagents
+- **Durable session ledger** — locally persisted JSONL transcripts with run metadata and CLI resume
+
 - 🧠 **Bring any model** — switch from Claude to GPT-4o to a local Llama with a single flag
-- 🛠️ **12 built-in tools** — file I/O, code search, shell execution, web search, sandboxed Python, and more
+- 🛠️ **20 built-in tools** — reversible file edits, code search, Git inspection, shell execution, web search, sandboxed Python, and more
 - 🔌 **Extensible by design** — Skills (YAML+Markdown prompts), Python plugins, and MCP tool servers
 - 📋 **3 interaction modes** — Ask (Q&A), Plan (review-then-execute), Agent (full autonomy)
 - 🧩 **Composable middleware** — Memory, Planning, Skills, and MCP each plug in independently
@@ -160,6 +163,9 @@ Every tool uses a clean schema that any supported LLM can call:
 | `read_file` | Read file contents (with line limits) | ✅ |
 | `write_file` | Create new files or overwrite existing ones | ❌ |
 | `edit_file` | Surgical string replacement (old → new, must be unique) | ❌ |
+| `multi_edit` | Apply several exact replacements atomically | ❌ |
+| `apply_patch` | Validate and apply a unified diff atomically | ❌ |
+| `undo_edit` | Restore a before-change OCC snapshot | ❌ |
 | `list_directory` | List directory contents with metadata | ✅ |
 | `find_files` | Glob-based file search | ✅ |
 | `grep_search` | Ripgrep-powered code search with context lines | ✅ |
@@ -169,8 +175,27 @@ Every tool uses a clean schema that any supported LLM can call:
 | `sandbox` | Execute Python code in an isolated subprocess | ❌ |
 | `spawn_agent` | Spawn parallel sub-agents for concurrent tasks | ❌ |
 | `load_skill` | Dynamically load skills to extend prompts | ✅ |
+| `git_status`, `git_diff`, `git_log`, `git_branch` | Read-only Git inspection for review workflows | ✅ |
 
 > **Auto-approved** tools run without prompting you. Configure this in `occ.yml` via `auto_approve`.
+
+Every runtime file edit creates a session-scoped snapshot and returns a unified diff. Use `/undo path/to/file` to restore the latest snapshot, or use `/changes` to inspect the active Git diff. Set `persist_snapshots: false` to disable local snapshots.
+
+### Safety model
+
+`permission_mode` is an enforced capability boundary, not merely an approval preference. `read-only` permits exploration and read-only Git tools; `workspace-write` permits configured workspace changes but rejects destructive shell commands; `full-access` is explicit opt-in. Filesystem roots, URL scheme/domain rules, public-IP checks, response limits, and network policy are applied before built-in tool execution. Web content is clearly marked as untrusted data before being returned to the model.
+
+### Non-interactive automation
+
+Use `occ exec` in CI or scripts. It prints the final response to stdout, writes progress as JSON Lines with `--json`, and respects the same sandbox and policy controls as the REPL.
+
+```bash
+occ exec "Run the targeted tests and summarize failures" --sandbox read-only
+occ exec "Implement the approved plan" --approval-mode auto --output-last-message result.md
+occ exec "Return JSON release notes" --json --output-schema schema.json --ephemeral
+```
+
+`--approval-mode suggest` denies non-auto-approved tool calls rather than waiting for a terminal prompt. `--ephemeral` leaves no session or snapshot artifacts.
 
 ---
 
@@ -342,12 +367,18 @@ export OCC_MODEL="gpt-4o"    # Override default model
 # Model configuration
 model: "claude-sonnet-4-20250514"
 max_tokens: 16000
+max_tool_output: 10000
 
 # Mode: ask | plan | agent
 mode: "agent"
 
 # Safety
 skip_approval: false          # true = auto-approve ALL tool calls (dangerous!)
+permission_mode: "workspace-write"  # read-only | workspace-write | full-access
+disallowed_tools: []          # Names/patterns blocked even when approvals are skipped
+workspace_roots: ["."]        # Readable roots for filesystem tools
+writable_roots: ["."]         # Writable roots for edit/write tools
+shell_policy: "workspace-write"  # read-only | workspace-write | full-access
 auto_approve:                 # Tools that skip the approval prompt
   - read_file
   - list_directory
@@ -363,6 +394,25 @@ prompt_caching: true
 # Context management
 max_context_tokens: 100000
 context_compaction: true
+
+# Durable local session transcripts
+persist_sessions: true
+sessions_dir: ".occ/sessions"
+persist_snapshots: true
+snapshots_dir: ".occ/snapshots"
+
+# Public web access and cache
+network_enabled: true
+web_allowed_domains: []
+web_blocked_domains: []
+web_cache_dir: ".occ/cache/web"
+web_max_response_bytes: 1000000
+
+# Provider retries and reusable subagent definitions
+provider_max_retries: 2
+max_turns: 100
+agents_dirs:
+  - ".occ/agents"
 
 # Extension directories
 skills_dirs:
@@ -392,6 +442,7 @@ occ --skip-approval            # Auto-approve all tools (caution!)
 occ --api-key sk-...           # Pass API key directly
 occ --base-url https://...    # Custom endpoint
 occ --config ./my-config.yml  # Custom config path
+occ --resume 20260712T...     # Resume a durable local session
 ```
 
 ---
@@ -407,11 +458,19 @@ Inside the interactive REPL:
 | `/agent <task>` | Force agent mode for one turn (full autonomy) |
 | `/mode [ask\|plan\|agent]` | Show or switch the default interaction mode |
 | `/skill [list\|load\|unload\|reload]` | Manage prompt-based skills |
+| `/plugin [list\|reload]` | Manage Python lifecycle plugins |
 | `/mcp [list\|add\|remove]` | Manage MCP servers at runtime |
 | `/plan [show\|progress\|clear]` | Manage the current plan/checklist |
 | `/memory` | List loaded memory files (`AGENTS.md`, `CLAUDE.md`, etc.) |
 | `/memory reload` | Rescan and reload memory files |
 | `/memory show` | Preview loaded memory content |
+| `/status` | Show model, permissions, context, and session details |
+| `/sessions` | List durable local sessions |
+| `/changes` | Show current Git status and uncommitted diff |
+| `/undo <file>` | Restore the latest OCC file snapshot |
+| `/rename <title>` | Give the active session a human-readable title |
+| `/export <path>` | Write a reproducible JSON task capsule |
+| `/agent list` | List custom `.occ/agents/*.md` roles |
 | `/clear` | Clear conversation history |
 | `/help` | Show command reference |
 
@@ -477,7 +536,7 @@ docker run -it -e ANTHROPIC_API_KEY=sk-ant-... occ
 Here are features and improvements planned for future releases:
 
 - [ ] **Git integration** — automatic staging, committing, branching, and PR creation
-- [ ] **File snapshots & undo** — snapshot files before edits for easy rollback
+- [x] **File snapshots, diffs & undo** — snapshots and unified diffs for write/edit/patch operations
 - [ ] **Streaming responses** — token-by-token streaming for faster feedback
 - [ ] **IDE integration** — VS Code extension and Language Server Protocol support
 - [ ] **Persistent memory** — learn project conventions, build commands, and preferences across sessions

@@ -4,12 +4,24 @@
 # Model (default: claude-sonnet-4-20250514)
 model: "claude-sonnet-4-20250514"
 max_tokens: 16000
+max_tool_output: 10000
 
 # Mode: ask | plan | agent
 mode: "agent"
 
 # Skip all approval prompts (dangerous!)
 skip_approval: false
+
+# Capability policy. Denied tools remain blocked even when approvals are skipped.
+permission_mode: "workspace-write"  # read-only | workspace-write | full-access
+disallowed_tools: []  # Supports names or patterns, e.g. ["mcp_prod_*"]
+
+# Runtime safety
+workspace_roots:
+  - "."
+writable_roots:
+  - "."
+shell_policy: "workspace-write"  # read-only | workspace-write | full-access
 
 # Tools that auto-approve without prompting
 auto_approve:
@@ -45,3 +57,37 @@ plugins_dirs:
 # Context management
 max_context_tokens: 100000
 context_compaction: true
+
+# Durable local transcripts and execution ledger. Use `occ --resume <session-id>`
+# to continue a saved conversation.
+persist_sessions: true
+sessions_dir: ".occ/sessions"
+persist_snapshots: true
+snapshots_dir: ".occ/snapshots"
+
+# Public web access is validated before requests and cached locally. Empty
+# allowlist means any public domain is allowed; private/local addresses remain blocked.
+network_enabled: true
+web_allowed_domains: []
+web_blocked_domains: []
+web_cache_dir: ".occ/cache/web"
+web_cache_ttl_seconds: 3600
+web_max_response_bytes: 1000000
+
+# Provider resilience and child-agent limits
+provider_max_retries: 2
+provider_retry_base_delay: 0.5
+max_turns: 100
+agents_dirs:
+  - ".occ/agents"
+
+# Trusted project-local lifecycle hooks. Commands receive OCC_TOOL_NAME,
+# OCC_FILE_PATH, OCC_COMMAND, and/or OCC_RESPONSE environment variables.
+# hooks:
+#   post_edit:
+#     - type: command
+#       command: "ruff check --fix $env:OCC_FILE_PATH"
+#       timeout: 60
+#   pre_run_shell:
+#     - type: command
+#       command: "python scripts/check-command-policy.py"
