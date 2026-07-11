@@ -14,6 +14,10 @@ from open_claude_code.events import (
     PostToolUse,
     PreToolUse,
     Stop,
+    StreamEnd,
+    StreamStart,
+    StreamTextDelta,
+    StreamThinkingDelta,
     SubagentStart,
     SubagentStop,
     Thinking,
@@ -307,6 +311,10 @@ class Agent:
                         {"message": str(error), "transient": error.transient, "status_code": error.status_code},
                     )
                 raise
+            except Exception:
+                # Preserve compatibility with providers that expose only
+                # one-shot responses or whose streaming endpoint is disabled.
+                return await self.provider.send(messages, tools, system_prompt)
         raise ProviderError("provider retry loop exited unexpectedly")
 
     async def _consume_provider_stream(
@@ -317,16 +325,19 @@ class Agent:
     ) -> ProviderResponse:
         """Consume one provider stream while publishing normalized UI/ledger events."""
         final: ProviderResponse | None = None
+        usage_emitted = False
         async for event in self.provider.stream(messages, tools, system_prompt):
-            if event.type == "content_delta":
+            if event.type in {"content_delta", "text_delta"}:
                 await self.event_bus.emit(TokenDelta(text=event.text, channel="content"))
+                await self.event_bus.emit(StreamTextDelta(text=event.text))
                 if self.session_store:
                     self.session_store.record("token_delta", {"channel": "content", "text": event.text})
             elif event.type == "thinking_delta":
                 await self.event_bus.emit(TokenDelta(text=event.text, channel="thinking"))
+                await self.event_bus.emit(StreamThinkingDelta(text=event.text))
                 if self.session_store:
                     self.session_store.record("token_delta", {"channel": "thinking", "text": event.text})
-            elif event.type in {"tool_call_delta", "tool_call_complete"} and event.tool_call:
+            elif event.type in {"tool_call_delta", "tool_call_complete"} and getattr(event, "tool_call", None):
                 await self.event_bus.emit(
                     ToolCallDelta(
                         tool_name=event.tool_call.name,
@@ -334,7 +345,16 @@ class Agent:
                         complete=event.type == "tool_call_complete",
                     )
                 )
+            elif event.type in {"tool_use_start", "tool_use_end"}:
+                await self.event_bus.emit(
+                    ToolCallDelta(
+                        tool_name=getattr(event, "tool_name", ""),
+                        tool_use_id=getattr(event, "tool_id", ""),
+                        complete=event.type == "tool_use_end",
+                    )
+                )
             elif event.type == "usage_delta" and event.usage:
+                usage_emitted = True
                 metadata = event.metadata
                 usage_event = UsageUpdated(
                     input_tokens=event.usage.input_tokens,
@@ -349,10 +369,25 @@ class Agent:
                 await self.event_bus.emit(usage_event)
                 if self.session_store:
                     self.session_store.record("usage_updated", usage_event.__dict__)
-            elif event.type == "message_complete" and event.response:
+            elif event.type in {"message_complete", "done"} and event.response:
                 final = event.response
         if final is None:
             raise ProviderError("provider stream completed without a final response")
+        if not usage_emitted:
+            metadata = final.metadata
+            usage_event = UsageUpdated(
+                input_tokens=final.usage.input_tokens,
+                output_tokens=final.usage.output_tokens,
+                cache_read_tokens=final.usage.cache_read_tokens,
+                cache_creation_tokens=final.usage.cache_creation_tokens,
+                request_id=metadata.request_id,
+                finish_reason=metadata.finish_reason,
+                latency_ms=metadata.latency_ms,
+                model=metadata.model,
+            )
+            await self.event_bus.emit(usage_event)
+            if self.session_store:
+                self.session_store.record("usage_updated", usage_event.__dict__)
         return final
 
     def _append_history(self, message: dict) -> None:
@@ -412,6 +447,182 @@ class Agent:
                 block.name, block.id, block.input, approved=True
             )
         return True, ""
+    async def _legacy_run_streaming(self, user_input: str) -> str:
+        """Run one turn with streaming. Tokens are emitted as they arrive.
+
+        Falls back to non-streaming run() if the provider stream raises.
+        """
+        # Let middleware transform input
+        if self.middleware:
+            user_input = await self.middleware.on_turn_start(user_input)
+
+        self.history.append({"role": "user", "content": user_input})
+
+        tool_schemas = [tool["schema"] for tool in self.tools.values()]
+        system_prompt = self._build_system_prompt()
+
+        while True:
+            self.history = await self._context_mgr.auto_compact_async(self.history)
+
+            # Stream tokens from the provider
+            await self.event_bus.emit(StreamStart())
+
+            response: ProviderResponse | None = None
+            full_text_parts: list[str] = []
+            thinking_parts: list[str] = []
+
+            try:
+                async for event in self.provider.stream(
+                    self.history, tool_schemas, system_prompt
+                ):
+                    if event.type == "text_delta":
+                        full_text_parts.append(event.text)
+                        await self.event_bus.emit(StreamTextDelta(text=event.text))
+
+                    elif event.type == "thinking_delta":
+                        thinking_parts.append(event.text)
+                        await self.event_bus.emit(
+                            StreamThinkingDelta(text=event.text)
+                        )
+
+                    elif event.type == "done":
+                        response = event.response
+
+            except Exception:
+                # Fallback: remove the user message we added, delegate to run()
+                self.history.pop()
+                return await self.run(user_input)
+
+            if response is None:
+                # Should not happen, but guard
+                self.history.pop()
+                return await self.run(user_input)
+
+            full_text = "".join(full_text_parts)
+            await self.event_bus.emit(StreamEnd(full_text=full_text))
+
+            # Emit thinking if present
+            if response.thinking:
+                await self.event_bus.emit(Thinking(text=response.thinking.thinking))
+
+            tool_use_blocks = [
+                b for b in response.content if isinstance(b, ToolUseBlock)
+            ]
+            text_blocks = [
+                b for b in response.content if isinstance(b, TextBlock)
+            ]
+
+            if tool_use_blocks:
+                # Build assistant message for history
+                assistant_content = []
+                if response.thinking:
+                    assistant_content.append({
+                        "type": "thinking",
+                        "thinking": response.thinking.thinking,
+                        "signature": response.thinking.signature,
+                    })
+                for block in response.content:
+                    if isinstance(block, TextBlock):
+                        assistant_content.append(
+                            {"type": "text", "text": block.text}
+                        )
+                    elif isinstance(block, ToolUseBlock):
+                        assistant_content.append({
+                            "type": "tool_use",
+                            "id": block.id,
+                            "name": block.name,
+                            "input": block.input,
+                        })
+                self.history.append(
+                    {"role": "assistant", "content": assistant_content}
+                )
+
+                # Process tools (same logic as run())
+                spawn_blocks = [
+                    b for b in tool_use_blocks if b.name == "spawn_agent"
+                ]
+                regular_blocks = [
+                    b for b in tool_use_blocks if b.name != "spawn_agent"
+                ]
+
+                tool_results = []
+
+                for block in regular_blocks:
+                    requires_approval = block.name not in self._auto_approve
+
+                    approved = await self.event_bus.emit_approval(
+                        PreToolUse(
+                            tool_name=block.name,
+                            tool_params=block.input,
+                            requires_approval=requires_approval,
+                        )
+                    )
+
+                    if approved and block.name in self.tools:
+                        tool_fn = self.tools[block.name]["function"]
+                        try:
+                            result = await tool_fn(**block.input)
+                        except Exception as e:
+                            result = f"Error: {e}"
+                    elif not approved:
+                        result = "Tool call denied by user"
+                    else:
+                        result = f"Unknown tool: {block.name}"
+
+                    result_str = str(result)
+
+                    await self.event_bus.emit(
+                        PostToolUse(
+                            tool_name=block.name,
+                            result=result_str,
+                            tool_use_id=block.id,
+                        )
+                    )
+
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result_str,
+                    })
+
+                if spawn_blocks:
+                    spawn_results = await self._run_subagents(spawn_blocks)
+                    tool_results.extend(spawn_results)
+
+                self.history.append({"role": "user", "content": tool_results})
+
+            else:
+                # Text-only response — we're done
+                text = "\n".join(b.text for b in text_blocks)
+
+                if response.thinking:
+                    assistant_content = [
+                        {
+                            "type": "thinking",
+                            "thinking": response.thinking.thinking,
+                            "signature": response.thinking.signature,
+                        },
+                        {"type": "text", "text": text},
+                    ]
+                    self.history.append(
+                        {"role": "assistant", "content": assistant_content}
+                    )
+                else:
+                    self.history.append(
+                        {"role": "assistant", "content": text}
+                    )
+
+                if self.middleware:
+                    await self.middleware.on_turn_end(text)
+
+                await self.event_bus.emit(Stop(text=text))
+                return text
+    async def run_streaming(self, user_input: str) -> str:
+        """Run a turn while publishing the legacy streaming UI events."""
+        await self.event_bus.emit(StreamStart())
+        text = await self.run(user_input)
+        await self.event_bus.emit(StreamEnd(full_text=text))
+        return text
 
     async def _run_subagents(self, spawn_blocks: list[ToolUseBlock]) -> list[dict]:
         """Run sub-agents concurrently via the SubagentManager."""

@@ -41,11 +41,7 @@ PLAN_GENERATION_TOOLS = {
 # ── Ask Mode ──────────────────────────────────────────────────────
 
 async def run_ask_mode(agent: Agent, user_input: str) -> None:
-    """Ask mode — single response, no tools.
-
-    Temporarily swaps the agent to ask-mode prompt with no tools,
-    gets one response, then restores the original settings.
-    """
+    """Ask mode — single response, no tools."""
     original_prompt = agent.system_prompt
     original_tools = agent.tools
 
@@ -53,7 +49,7 @@ async def run_ask_mode(agent: Agent, user_input: str) -> None:
     agent.tools = {}
 
     try:
-        await agent.run(user_input)
+        await agent.run_streaming(user_input)
     except ProviderError as e:
         console.print(f"  Error: {e}", style="bold red")
     finally:
@@ -105,7 +101,7 @@ async def run_plan_mode(agent: Agent, user_input: str) -> None:
     console.print()
 
     try:
-        plan_text = await agent.run(user_input)
+        plan_text = await agent.run_streaming(user_input)
     except ProviderError as e:
         console.print(f"  Error: {e}", style="bold red")
         agent.system_prompt = original_prompt
@@ -150,7 +146,7 @@ async def run_plan_mode(agent: Agent, user_input: str) -> None:
         console.print()
 
         try:
-            plan_text = await agent.run(response)
+            plan_text = await agent.run_streaming(response)
         except ProviderError as e:
             console.print(f"  Error: {e}", style="bold red")
             continue
@@ -168,7 +164,7 @@ async def run_plan_mode(agent: Agent, user_input: str) -> None:
     agent.tools = original_tools
 
     try:
-        await agent.run(
+        await agent.run_streaming(
             "Execute the approved plan now. Work through each step and report progress."
         )
     except ProviderError as e:
@@ -184,12 +180,12 @@ async def run_plan_mode(agent: Agent, user_input: str) -> None:
 # ── Agent Mode ────────────────────────────────────────────────────
 
 async def run_agent_mode(agent: Agent, user_input: str) -> None:
-    """Agent mode — full autonomous tool loop."""
+    """Agent mode — full autonomous tool loop with streaming."""
     original_prompt = agent.system_prompt
     agent.system_prompt = MODE_PROMPTS["agent"]
 
     try:
-        await agent.run(user_input)
+        await agent.run_streaming(user_input)
     except ProviderError as e:
         console.print(f"  Error: {e}", style="bold red")
     finally:

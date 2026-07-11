@@ -7,11 +7,13 @@ This module provides a polished, premium terminal experience with:
   - Progress indicator while the agent is thinking
   - Markdown panel for final responses
   - Plan progress display
+  - Real-time streaming text output
 """
 
 from __future__ import annotations
 
 import json
+import sys
 import time
 
 from rich.console import Console
@@ -28,6 +30,10 @@ from open_claude_code.events import (
     PostToolUse,
     PreToolUse,
     Stop,
+    StreamEnd,
+    StreamStart,
+    StreamTextDelta,
+    StreamThinkingDelta,
     SubagentStart,
     SubagentStop,
     Thinking,
@@ -40,6 +46,8 @@ console = Console()
 _spinner: Status | None = None
 _turn_start_time: float | None = None
 _tool_count: int = 0
+_is_streaming: bool = False
+_stream_text: list[str] = []
 
 
 # ── Formatting Helpers ─────────────────────────────────────────────
@@ -66,6 +74,12 @@ TOOL_COLORS = {
     # Agent/meta (red/orange)
     "spawn_agent": "bright_red",
     "load_skill": "bright_cyan",
+    # Git tools (cyan/teal)
+    "git_status": "bright_cyan",
+    "git_diff": "bright_cyan",
+    "git_commit": "bright_yellow",
+    "git_log": "bright_cyan",
+    "git_branch": "bright_cyan",
 }
 
 # Tool icons — compact, single-char where possible
@@ -85,6 +99,11 @@ TOOL_ICONS = {
     "write_plan": "📋",
     "update_plan": "✅",
     "read_plan": "📖",
+    "git_status": "📊",
+    "git_diff": "📝",
+    "git_commit": "💾",
+    "git_log": "📜",
+    "git_branch": "🌿",
 }
 
 
@@ -188,6 +207,10 @@ def _elapsed_str() -> str:
 async def on_thinking(event: Thinking) -> None:
     """Render thinking as a subtle status update."""
     global _spinner
+    # If we're streaming, thinking was already shown via StreamThinkingDelta
+    if _is_streaming:
+        return
+
     text = event.text.strip().replace("\n", " ")
     if len(text) > MAX_THINKING:
         text = text[:MAX_THINKING] + "…"
@@ -246,6 +269,47 @@ async def on_post_tool_use(event: PostToolUse) -> None:
     # Resume spinner
     if _spinner:
         _spinner.update(f"[dim]Thinking…{_elapsed_str()}[/]")
+
+
+# ── Streaming Event Handlers ──────────────────────────────────────
+
+async def on_stream_start(event: StreamStart) -> None:
+    """Stop the spinner and prepare for streaming output."""
+    global _spinner, _is_streaming, _stream_text
+    _is_streaming = True
+    _stream_text = []
+
+    if _spinner:
+        _spinner.stop()
+        _spinner = None
+
+
+async def on_stream_text_delta(event: StreamTextDelta) -> None:
+    """Print text tokens as they arrive — no buffering."""
+    _stream_text.append(event.text)
+    # Write directly to stdout for zero-latency streaming
+    sys.stdout.write(event.text)
+    sys.stdout.flush()
+
+
+async def on_stream_thinking_delta(event: StreamThinkingDelta) -> None:
+    """Show thinking tokens as dimmed text during streaming."""
+    # We don't print thinking tokens to avoid noise — the spinner
+    # was already stopped by StreamStart. Could add a verbose mode later.
+    pass
+
+
+async def on_stream_end(event: StreamEnd) -> None:
+    """End streaming and clean up."""
+    global _is_streaming, _stream_text
+
+    if _stream_text:
+        # We already printed the raw text. Add a newline to finish.
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+
+    _is_streaming = False
+    _stream_text = []
 
 
 async def on_stop(event: Stop) -> None:
@@ -359,3 +423,8 @@ def register_ui_listeners(event_bus: EventBus) -> None:
     event_bus.on(Stop, on_stop)
     event_bus.on(SubagentStart, on_subagent_start)
     event_bus.on(SubagentStop, on_subagent_stop)
+    # Streaming events
+    event_bus.on(StreamStart, on_stream_start)
+    event_bus.on(StreamTextDelta, on_stream_text_delta)
+    event_bus.on(StreamThinkingDelta, on_stream_thinking_delta)
+    event_bus.on(StreamEnd, on_stream_end)

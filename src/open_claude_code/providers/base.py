@@ -2,7 +2,6 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from time import monotonic
 from typing import AsyncIterator, Literal
 
 
@@ -31,6 +30,27 @@ class ThinkingBlock:
     thinking: str
     signature: str
     type: str = "thinking"
+
+
+@dataclass
+class StreamEvent:
+    """A single event from a streaming LLM response.
+
+    Event types:
+      - text_delta:       Incremental text token
+      - thinking_delta:   Incremental thinking/reasoning token
+      - tool_use_start:   Tool call started (has name/id)
+      - input_json_delta: Incremental tool input JSON
+      - tool_use_end:     Tool call input is complete
+      - done:             Stream finished, full response is in `response`
+    """
+    type: str
+    text: str = ""
+    tool_name: str = ""
+    tool_id: str = ""
+    tool_input: dict = field(default_factory=dict)
+    thinking_signature: str = ""
+    response: "ProviderResponse | None" = None
 
 
 @dataclass
@@ -108,6 +128,9 @@ class Provider(ABC):
 
     All providers normalize their response into ProviderResponse so the
     agent loop never needs to know which LLM is being used.
+
+    Providers must implement send() and should implement stream() for
+    real-time token delivery. The default stream() falls back to send().
     """
 
     @property
@@ -129,30 +152,15 @@ class Provider(ABC):
         messages: list[dict],
         tools: list[dict],
         system_prompt: str,
-    ) -> AsyncIterator[ProviderStreamEvent]:
-        """Yield a normalized stream.
+    ) -> AsyncIterator[StreamEvent]:
+        """Stream response tokens from the model.
 
-        Providers that expose token streams can override this method. The
-        default preserves compatibility for providers/endpoints that only have
-        a one-shot API while still giving the agent a uniform consumption path.
+        Default implementation falls back to send() and yields a single
+        done event. Providers should override for true streaming.
         """
-        started = monotonic()
-        yield ProviderStreamEvent(type="message_start")
-        try:
-            response = await self.send(messages, tools, system_prompt)
-        except ProviderError as error:
-            yield ProviderStreamEvent(type="error", text=str(error))
-            raise
-        if not response.metadata.latency_ms:
-            response.metadata.latency_ms = (monotonic() - started) * 1000
-        if not response.metadata.model:
-            response.metadata.model = self.model_name
-        if response.thinking:
-            yield ProviderStreamEvent(type="thinking_delta", text=response.thinking.thinking)
+        response = await self.send(messages, tools, system_prompt)
+        # Yield text as a single delta for compat
         for block in response.content:
             if isinstance(block, TextBlock):
-                yield ProviderStreamEvent(type="content_delta", text=block.text)
-            else:
-                yield ProviderStreamEvent(type="tool_call_complete", tool_call=block)
-        yield ProviderStreamEvent(type="usage_delta", usage=response.usage, metadata=response.metadata)
-        yield ProviderStreamEvent(type="message_complete", response=response, metadata=response.metadata)
+                yield StreamEvent(type="text_delta", text=block.text)
+        yield StreamEvent(type="done", response=response)

@@ -1,9 +1,8 @@
 <div align="center">
   <h1>⚡ Open Claude Code (OCC)</h1>
   <p>
-    <a href="https://pypi.org/project/open-claude-code/"><img src="https://img.shields.io/pypi/v/open-claude-code?color=blue&label=PyPI" alt="PyPI"></a>
     <a href="https://github.com/NastyRunner13/Open-Claude-Code/actions"><img src="https://img.shields.io/github/actions/workflow/status/NastyRunner13/Open-Claude-Code/ci.yml?label=CI" alt="CI"></a>
-    <img src="https://img.shields.io/pypi/pyversions/open-claude-code?color=green" alt="Python">
+    <img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="Python 3.12+">
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-brightgreen" alt="License"></a>
   </p>
   <p><strong>An open-source, model-agnostic AI coding agent that lives in your terminal.</strong></p>
