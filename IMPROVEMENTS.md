@@ -1,9 +1,43 @@
-# OCC Improvement Roadmap
+# OCC Improvement Roadmap and Implementation Audit
 
 This document reviews Open Claude Code (OCC) against current Codex and Claude
 Code capabilities, then maps those product ideas onto this codebase. It is
 intentionally implementation-oriented: each recommendation names the current
 gap, why it matters, and where to start.
+
+## Implementation Status (audited 2026-07-12)
+
+Status in this document is based on the checked-in source and regression
+tests, not on planned work or README claims. **Implemented** means a feature
+is wired into the normal CLI runtime. **Partial** means the core is present but
+important capability, hardening, or UX work remains. **Planned** means no
+end-to-end implementation was found.
+
+| Area | Status | Evidence / remaining boundary |
+| --- | --- | --- |
+| MCP stdio tool calls | Implemented | Bound async MCP wrappers return `ToolResult`; only stdio transport is supported. |
+| Plugin lifecycle | Implemented | Plugins load at startup and receive start, before-send, after-response, tool-result, and stop hooks; there is no plugin packaging or isolation model. |
+| Plan safety | Implemented | Plan generation receives an allowlisted, read-only tool registry; execution restores the full registry after explicit approval. |
+| Runtime tool policy | Implemented | `ToolPolicy` is non-bypassable and supports `read-only`, `workspace-write`, `full-access`, and disallowed-tool patterns. |
+| File safety and reversible edits | Implemented | Bound filesystem tools enforce roots; writes, edits, multi-edits, and patches create snapshots, return unified diffs, and support undo. |
+| Shell and web safety | Partial | Coarse shell classification, workspace cwd validation, public-HTTP(S) validation, cache, and prompt-injection wrapping exist; no command segmentation, process-tree cleanup, or DNS/IP revalidation. |
+| Provider streaming and resilience | Implemented | Normalized stream events, token/tool/usage events, typed transient errors, and retry/backoff are wired; cost calculation and a user-facing `/cost` command are absent. |
+| Durable sessions | Partial | JSONL history/tool ledger, resume, list, rename, export, redacted config snapshots, and nested subagent sessions exist; file/approval/change events are not yet a complete task capsule. |
+| Automation CLI | Implemented | `occ exec`, JSON Lines, output schema validation, last-message output, ephemeral mode, and sandbox/approval flags are implemented. |
+| Hooks | Partial | Trusted command hooks can run before tools, after tools/edits, and at stop; prompt, HTTP, MCP, agent, notification, and transcript-capture hooks are not implemented. |
+| Git workflow | Partial | Read-only `git_status`, `git_diff`, `git_log`, `git_branch`, and `/changes` exist; review, commit, PR, and GitHub workflows do not. |
+| Skills | Implemented | Discovery exposes only metadata; full instructions load on demand, and the loader supports `disable_model_invocation`, `allowed_tools`, scripts, examples, and assets. |
+| Subagents | Partial | Named role definitions, explicit models/tool allowlists/policies/max turns, isolated histories, sessions, and concurrent execution exist; worktrees, persistent memory, background tasks, and management UX are pending. |
+
+### Immediate priorities after this audit
+
+1. Harden the existing safety primitives: command segmentation and process
+   cleanup, DNS/IP validation for web access, and policy coverage for MCP and
+   plugins.
+2. Complete the observable automation path: cost reporting, richer session
+   events, command-output streaming, and robust `occ exec` integration tests.
+3. Build the missing developer workflows: review/commit/PR support, scheduler,
+   durable tasks, and GitHub Actions.
 
 Research checked during this review:
 
@@ -29,18 +63,16 @@ real coding workloads.
 
 Highest priority:
 
-1. Fix correctness gaps first: MCP tool invocation is currently broken, plugins
-   are documented but not wired into the CLI, plan mode can still call
-   destructive tools, and context compaction ignores the `context_compaction`
-   config flag.
-2. Add a safety layer before expanding autonomy: path sandboxing, command
-   policy, file snapshots, diffs, undo, and structured approvals.
-3. Add streaming and persistent sessions: these change the perceived quality of
-   the product more than most features.
-4. Build automation as a first-class runtime: non-interactive mode, JSONL event
-   streams, scheduled tasks, hooks, GitHub Actions, and durable task state.
-5. Improve agent intelligence with code intelligence, better subagent
-   orchestration, skill loading on demand, and evaluation traces.
+1. Finish safety hardening around the implemented tools: segmented shell
+   policy, process cleanup, web DNS/IP validation, and MCP/plugin policy.
+2. Turn usage and session foundations into an observable automation product:
+   `/cost`, complete task evidence, command streaming, and CLI integration
+   coverage.
+3. Build scheduled and GitHub automation on top of the existing `occ exec`
+   JSONL path rather than creating a parallel execution model.
+4. Add review and explicit Git workflows before expanding autonomous mutation.
+5. Improve code intelligence and advanced subagent orchestration after the
+   trust, automation, and review layers are complete.
 
 ## Current OCC Feature Inventory
 
@@ -57,56 +89,51 @@ Implemented or partially implemented:
 - Project memory files: `AGENTS.md`, `CLAUDE.md`, `.occ/memory.md`, etc.
 - In-memory plan checklist tools.
 - Basic exact-match edit tool.
-- Basic MCP stdio client.
-- Basic plugin loader.
-- LLM-based context compaction.
+- MCP stdio client with callable tool wrappers.
+- Plugin runtime with lifecycle hook dispatch and `/plugin list|reload`.
+- LLM-based context compaction that respects `context_compaction`.
 - Non-bypassable agent-level tool policy with configurable modes and deny rules.
 - Durable local session metadata and JSONL ledger, including CLI resume and
   session listing.
-- Rich/prompt-toolkit terminal UI.
+- Token-streaming Rich/prompt-toolkit terminal UI.
 - Tests for core agent loop, providers, tools, config, planning, memory,
   skills, middleware, events, and context.
 
-Not yet implemented or not wired end-to-end:
+Still pending or only partially implemented:
 
-- Streaming tokens and streaming tool/progress events.
-- Rich transcripts with file-change snapshots, usage, provider deltas, and
-  exportable task capsules.
-- File snapshots, rollback, diff review, multi-edit, unified patch application.
-- Network egress policy and fine-grained per-MCP/per-plugin capability policy.
-- Cost/token accounting surfaced to the user.
-- Non-interactive CLI mode for scripts and CI.
-- JSONL event output for automation.
+- Cost/token accounting surfaced to the user (`/cost` and price tables).
+- Complete task-capsule evidence: approvals, file changes/snapshots, provider
+  deltas, plan updates, and a clear replay/export format.
+- Command-output streaming, command segmentation, environment policy, and
+  process-tree cleanup for shell execution.
+- DNS/IP revalidation, robots/content policy, and fine-grained per-MCP and
+  per-plugin capability policy.
 - Scheduled tasks, reminders, monitors, and recurring loops.
-- Git and GitHub first-class workflows.
-- IDE extension, language-server code intelligence, diagnostics.
+- Review, commit, PR, GitHub, and worktree workflows.
+- IDE integration and language-server code intelligence.
 - Remote/browser/desktop control surfaces.
-- Plugin execution in the main CLI runtime.
-- Full MCP support: HTTP transport, OAuth, server instructions, resources,
+- Full MCP support: streamable HTTP, OAuth, server instructions, resources,
   prompts, elicitation, and per-tool policy.
 
 ## Important Codebase Issues To Fix
 
-These are not just wishlist items; they are current product correctness or
-trust issues.
+This section preserves the original implementation targets, but each item is
+now marked with the observed state so it can be used as a working backlog.
 
-### 1. MCP Tools Are Registered With No Callable Function
+### 1. MCP Tools Are Registered With No Callable Function — Implemented
 
 File: `src/open_claude_code/mcp/client.py`
 
-`MCPManager.get_occ_tools()` creates OCC tool schemas, but the `"function"`
-field is left as `None`. The nested `make_caller()` closure is never awaited or
-assigned. If the model calls an MCP tool, `Agent.run()` will try `await
-tool_fn(**block.input)` and fail with a `NoneType` call error.
+`MCPManager.get_occ_tools()` now assigns a bound async caller per discovered
+tool. It routes to the correct server and returns `ToolResult`; regression
+coverage invokes a fake server through the OCC wrapper.
 
-Fix:
+Remaining work:
 
-- Replace the unused closure with a real bound async function per tool.
-- Add a regression test that injects a fake MCP client/tool and calls the OCC
-  wrapper.
-- Return `ToolResult` instead of plain strings for consistent metadata.
+- Add streamable HTTP transport, authentication, server instructions,
+  resources/prompts/elicitation, and per-tool policy/timeout controls.
 
-Suggested patch shape:
+Implemented wrapper shape:
 
 ```python
 def make_caller(tool_name: str):
@@ -120,7 +147,7 @@ occ_tools[occ_name] = {
 }
 ```
 
-### 2. Plugin System Is Documented But Not Wired Into The CLI
+### 2. Plugin System Is Documented But Not Wired Into The CLI — Implemented
 
 Files:
 
@@ -129,76 +156,64 @@ Files:
 - `src/open_claude_code/config.py`
 - `README.md`
 
-`AgentConfig.plugins_dirs` exists and the README advertises Python plugins, but
-`main.py` never creates `PluginManager`, scans plugin directories, or emits
-plugin hooks from the agent loop. That means plugins are currently a tested
-library component, not a user-visible feature.
+`main.py` now installs `PluginMiddleware` in the runtime stack. It scans
+configured directories at startup and dispatches `on_agent_start`,
+`on_before_send`, `on_after_response`, `on_tool_result`, and `on_agent_stop`.
+`/plugin list` and `/plugin reload` are available in the interactive CLI.
 
-Fix:
+Remaining work:
 
-- Add `PluginMiddleware` that wraps `PluginManager`.
-- Call plugin hooks from the event/middleware lifecycle:
-  `on_agent_start`, `on_before_send`, `on_after_response`, `on_tool_result`,
-  `on_agent_stop`.
-- Add `/plugin list`, `/plugin reload`, `/plugin enable`, `/plugin disable`.
-- Decide whether plugins can add tools. If yes, standardize the schema shape.
-- Update docs after wiring the feature.
+- Add enable/disable state, a documented package/manifest format, tool schema
+  registration, capability policy, and isolation for untrusted plugin code.
 
-### 3. Plan Mode Is Prompt-Only Safe, Not Runtime-Enforced Safe
+### 3. Plan Mode Is Prompt-Only Safe, Not Runtime-Enforced Safe — Implemented
 
 Files:
 
 - `src/open_claude_code/modes.py`
 - `src/open_claude_code/agent.py`
 
-Plan mode asks the model not to modify files, but it keeps the normal tool
-registry active during planning. A model can still request `write_file`,
-`edit_file`, `run_shell`, or `sandbox`; the only barrier is the approval prompt.
-That is weaker than the product promise of "plan then execute".
+Plan generation now replaces the normal registry with the explicit
+`PLAN_GENERATION_TOOLS` allowlist. It includes exploration and plan tools only;
+the full registry is restored only after user approval for execution.
 
-Fix:
+Keep covered:
 
-- During plan generation, restrict tools to read-only exploration:
-  `read_file`, `list_directory`, `find_files`, `grep_search`, `web_search`,
-  `read_url`, `read_plan`, maybe `write_plan`.
-- Enforce this in code, not just in the prompt.
-- Add a `ToolPolicy` layer that can deny tool calls before approval handling.
+- Preserve regression coverage for attempts to call write/edit/shell tools
+  while the planning registry is active.
 
-### 4. `context_compaction` Config Is Ignored
+### 4. `context_compaction` Config Is Ignored — Implemented
 
 Files:
 
 - `src/open_claude_code/config.py`
 - `src/open_claude_code/agent.py`
 
-`AgentConfig.context_compaction` is parsed, but `Agent.run()` always calls
-`auto_compact_async()`. Users cannot actually disable compaction.
+`Agent.run()` now calls automatic compaction only when the config is absent or
+`context_compaction` is true. A regression test verifies the disabled case.
 
-Fix:
+Remaining work:
 
-- Gate auto-compaction with `if not config or config.context_compaction:`.
-- Add a test that sets `context_compaction=False`.
+- Improve compaction quality metrics and preserve structured task evidence when
+  long histories are summarized.
 
-### 5. `max_tool_output` Config Is Ignored
+### 5. `max_tool_output` Config Is Ignored — Implemented
 
 Files:
 
 - `src/open_claude_code/config.py`
 - `src/open_claude_code/tools/*.py`
 
-The config includes `max_tool_output`, but tools use module-level constants such
-as `MAX_OUTPUT = 10000`. This prevents users from tuning output size globally or
-per tool.
+The runtime binds a `ToolContext` from `AgentConfig`; built-in tools take its
+`max_output` rather than their legacy standalone defaults. Tests cover the
+configurable truncation path.
 
-Fix:
+Remaining work:
 
-- Introduce a `ToolContext` object passed to every tool.
-- Include config, cwd, sandbox policy, output limits, and session ID in that
-  context.
-- Keep legacy standalone tool functions for tests if needed, but route CLI
-  runtime through context-bound tool wrappers.
+- Extend context-bound limits and artifact storage to MCP, plugin, and long
+  shell outputs.
 
-### 6. File Tools Need A Workspace Sandbox
+### 6. File Tools Need A Workspace Sandbox — Implemented
 
 Files:
 
@@ -209,62 +224,49 @@ Files:
 - `src/open_claude_code/tools/find_files.py`
 - `src/open_claude_code/tools/grep_search.py`
 
-Auto-approved read tools can read arbitrary paths if the model supplies them.
-Approved write/edit tools can write arbitrary paths. This is risky once you add
-automation, scheduled tasks, or broad auto-approval modes.
+Runtime-bound file tools resolve paths and restrict reads to `workspace_roots`
+and writes to `writable_roots`. Denials emit `ToolDenied` events, and glob
+results are filtered back through the read policy.
 
-Fix:
+Remaining work:
 
-- Add `workspace_roots` and `writable_roots` to config.
-- Resolve every path with `Path.resolve()`.
-- Deny reads outside allowed roots unless explicitly approved.
-- Deny writes outside writable roots unless a high-trust permission mode is
-  active.
-- Log every denied path access as an event.
+- Add explicit, auditable one-off elevation rather than relying solely on
+  configuration changes for outside-root access.
 
-### 7. Shell Tool Needs Structured Policy And Better Runtime Control
+### 7. Shell Tool Needs Structured Policy And Better Runtime Control — Partial
 
 File: `src/open_claude_code/tools/run_shell.py`
 
-Current shell execution is an all-or-nothing approved command string. It has no
-command classifier, no network/write policy, no cwd override, no env control, no
-PTY support, no streaming output, no process-tree cleanup, and no structured
-command segments.
+The shell tool now has a coarse read/write/destructive classifier, policy modes,
+workspace-validated cwd override, timeout, exit status, and output truncation.
+Destructive commands are denied outside `full-access`; `read-only` denies
+non-read commands.
 
-Fix:
+Remaining work:
 
-- Add command metadata: cwd, env allowlist, timeout, shell, requires_network,
-  writes_paths, destructive flag.
-- Add policy presets: `read-only`, `workspace-write`, `full-access`.
-- Split command approval from command execution.
-- Stream stdout/stderr as events.
-- Kill process groups on timeout.
-- Persist command output artifacts for long logs instead of dumping everything
-  into context.
+- Parse every command segment, control environment/network access, stream
+  stdout/stderr, terminate the full process tree on timeout, and save long logs
+  as session artifacts.
 
-### 8. `read_url` And `web_search` Need Web Safety Controls
+### 8. `read_url` And `web_search` Need Web Safety Controls — Partial
 
 Files:
 
 - `src/open_claude_code/tools/read_url.py`
 - `src/open_claude_code/tools/web_search.py`
 
-`read_url` can fetch arbitrary URLs and returns raw page text into the model
-context. It has no URL scheme validation, private-network blocking, content
-length limit before download, robots/policy controls, or prompt-injection
-labeling. `web_search` is auto-approved and depends on a third-party package.
+Runtime web access now requires public HTTP(S), supports domain allow/block
+lists and network disablement, limits response bytes, caches results, and wraps
+web/search content as untrusted. `fetch_public_url` rejects unsafe resolved
+addresses before returning content.
 
-Fix:
+Remaining work:
 
-- Allow only `http` and `https`.
-- Block localhost, link-local, RFC1918, metadata IPs, and file/data schemes by
-  default.
-- Add configurable domain allow/deny lists.
-- Add source metadata and explicit "untrusted web content" wrapping.
-- Prefer official docs domains when the task asks about known vendor products.
-- Cache search/read results in `.occ/cache/web/`.
+- Add DNS-rebinding protection across redirects, robots/content policy,
+  provenance-aware source selection, and a maintained dependency strategy for
+  search.
 
-### 9. Provider Abstraction Lacks Streaming, Usage, Retries, And Structured Errors
+### 9. Provider Abstraction Lacks Streaming, Usage, Retries, And Structured Errors — Implemented
 
 Files:
 
@@ -272,21 +274,17 @@ Files:
 - `src/open_claude_code/providers/*.py`
 - `src/open_claude_code/agent.py`
 
-`ProviderResponse` only contains `thinking` and `content`. There is no usage,
-cost, latency, request ID, finish reason, safety status, or retry metadata. The
-agent cannot stream tokens or tool-call deltas. Provider errors are plain
-strings.
+`ProviderResponse` now carries usage and metadata; providers expose normalized
+streams and typed errors. The agent emits token, tool-call, usage, and provider
+failure events, records stream/usage events in sessions, and retries transient
+429/5xx-style failures with exponential backoff.
 
-Fix:
+Remaining work:
 
-- Add `ProviderUsage`, `ProviderMetadata`, and typed `ProviderError` subclasses.
-- Add `stream()` to the provider protocol.
-- Emit `TokenDelta`, `ToolCallDelta`, `UsageUpdated`, and `ProviderError`
-  events.
-- Add retry/backoff for transient API failures.
-- Track request IDs for support/debugging.
+- Add price-aware cost calculation, budget controls, and provider-specific
+  safety/error metadata where the upstream API exposes it.
 
-### 10. OpenAI Provider Should Move Toward The Responses API
+### 10. OpenAI Provider Should Move Toward The Responses API — Planned
 
 File: `src/open_claude_code/providers/openai.py`
 
@@ -303,49 +301,41 @@ Fix:
 - Support reasoning effort, structured outputs, streamed response events, and
   usage metadata.
 
-### 11. Subagents Are Useful But Too Coarse
+### 11. Subagents Are Useful But Too Coarse — Partial
 
 Files:
 
 - `src/open_claude_code/tools/spawn_agent.py`
 - `src/open_claude_code/subagents/manager.py`
 
-Current subagents share the parent provider, get the parent tools minus
-`spawn_agent`, and default to an enforced read-only capability policy. They do
-not yet get middleware prompt additions, custom roles/models, worktree
-isolation, or independent transcripts, which limits them to safe research
-tasks rather than implementation work.
+Subagents default to read-only and cannot recurse. They can now use a named
+`.occ/agents/*.md` role with system instructions, model, tool allowlist,
+disallowed tools, permission mode, and max turns. They have isolated history,
+an event bus, optional nested durable sessions, and concurrent execution.
 
-Fix:
+Remaining work:
 
-- Add custom subagent definitions under `.occ/agents/*.md`.
-- Support per-agent model, system prompt, tools, disallowed tools, max turns,
-  memory scope, and permission policy.
-- Add agent IDs, transcripts, resumable threads, and `/agent` management.
-- Default subagents to read-only unless explicitly elevated.
-- Summarize verbose subagent output before returning to parent context.
+- Add memory scopes, direct resume/management UX, background tasks, worktree
+  isolation, and configurable result summarization rather than fixed truncation.
 
-### 12. Skills Load Too Much Context
+### 12. Skills Load Too Much Context — Implemented
 
 Files:
 
 - `src/open_claude_code/skills/loader.py`
 - `src/open_claude_code/middleware/skills.py`
 
-Loaded skills inject full instructions into every request. Claude Code and
-Codex-style skills usually load lightweight metadata first, then load full skill
-content on invocation or when the model chooses it.
+Skill discovery parses frontmatter without instructions, exposes a compact
+catalog, and loads the full `SKILL.md` only through `load_skill` or `/skill`.
+Frontmatter supports invocation control, allowed tools, and optional resource
+directories.
 
-Fix:
+Remaining work:
 
-- Separate skill metadata from full skill content.
-- Add `disable_model_invocation`, `allowed_tools`, `scripts`, and `assets`
-  frontmatter.
-- Let the model see only names/descriptions initially.
-- Load full content through the `load_skill` tool or direct slash command.
-- Add namespaced plugin skills.
+- Add namespaced plugin skills and enforce `allowed_tools` rather than treating
+  that field as descriptive metadata.
 
-### 13. Session History Has A Durable Baseline, Not A Full Task Capsule
+### 13. Session History Has A Durable Baseline, Not A Full Task Capsule — Partial
 
 Files:
 
@@ -368,20 +358,20 @@ Remaining work:
 
 | Capability | Codex / Claude Code baseline | OCC today | Priority |
 | --- | --- | --- | --- |
-| Streaming responses | Supported | No | P0 |
-| Diffs and syntax highlighting | Supported | No diff review | P0 |
-| File snapshots / undo | Rollback via transcript/git workflow patterns | No | P0 |
-| Runtime permission modes | Sandbox/approval modes | Basic capability modes + path/shell policy | P0 |
-| Durable sessions / resume | Supported | Local JSONL + CLI resume | P1 |
-| MCP | Richer transports/auth/instructions | Basic stdio tools; richer transports pending | P0 |
+| Streaming responses | Supported | Implemented: token, thinking, tool, and usage events | P1 |
+| Diffs and syntax highlighting | Supported | Unified diffs after OCC edits; syntax highlighting/review pending | P1 |
+| File snapshots / undo | Rollback via transcript/git workflow patterns | Implemented for OCC write/edit/multi-edit/patch operations | P1 |
+| Runtime permission modes | Sandbox/approval modes | Implemented: capability modes + path/shell policy | P1 |
+| Durable sessions / resume | Supported | Local JSONL + CLI resume, list, rename, export; richer evidence pending | P1 |
+| MCP | Richer transports/auth/instructions | Callable stdio tools; richer transports/auth/policy pending | P1 |
 | Plugins | Packaging layer | Runtime hooks wired; packaging/sandboxing pending | P1 |
-| Non-interactive mode | `codex exec`, `claude -p` | No | P1 |
-| JSONL event stream | Supported by Codex exec | No | P1 |
+| Non-interactive mode | `codex exec`, `claude -p` | Implemented: `occ exec` | P1 |
+| JSONL event stream | Supported by Codex exec | Implemented for `occ exec --json` | P1 |
 | Scheduled tasks / loops | Claude `/loop`, scheduled tasks | No | P1 |
-| Hooks | Claude hooks, Codex hooks/config | No runtime hooks | P1 |
+| Hooks | Claude hooks, Codex hooks/config | Trusted command hooks only | P1 |
 | GitHub automation | GitHub Actions / PR workflows | No first-class support | P1 |
-| Subagent orchestration | Custom agents, isolated contexts | Basic spawn only | P1 |
-| Cost / token tracking | Exposed in automation outputs | No | P1 |
+| Subagent orchestration | Custom agents, isolated contexts | Named roles, isolated context/session, concurrent spawn; no worktrees/background | P1 |
+| Cost / token tracking | Exposed in automation outputs | Usage events present; costs and `/cost` missing | P1 |
 | Code review workflow | `/review` and GitHub review | No | P1 |
 | Code intelligence | Claude language-server feature | No | P2 |
 | IDE integration | Codex/Claude extensions | No | P2 |
@@ -410,12 +400,10 @@ OCC implementation ideas:
 Codex stores transcripts locally and supports resuming previous sessions,
 including non-interactive runs.
 
-OCC implementation ideas:
-
-- Persist JSONL transcripts under `.occ/sessions`.
-- Store session summary, cwd, model, mode, config hash, approval history, and
-  plan state.
-- Add `occ resume`, `occ resume --last`, `occ resume --all`, and `/resume`.
+OCC status: local JSONL history/tool ledgers, redacted config snapshots, cwd,
+model/mode, config hash, CLI `--resume <session-id>`, `/sessions`, `/rename`,
+and `/export` are implemented. Remaining work is named/last/all resume UX,
+approval/plan/file-change evidence, and a stable replayable capsule format.
 
 ### Non-Interactive Automation
 
@@ -423,14 +411,10 @@ Codex `exec` is designed for scripts and CI, with final output on stdout,
 progress on stderr, JSONL event mode, structured output schemas, and explicit
 sandbox/approval settings.
 
-OCC implementation ideas:
-
-- Add `occ exec "<task>"`.
-- Add `--json` for JSONL events.
-- Add `--output-last-message <path>`.
-- Add `--output-schema <schema.json>` for structured final responses.
-- Add `--sandbox read-only|workspace-write|full-access`.
-- Add `--approval-mode suggest|auto|full-access`.
+OCC status: `occ exec`, `--json`, `--output-last-message`,
+`--output-schema`, `--sandbox`, `--approval-mode`, and `--ephemeral` are
+implemented. Remaining work is progress separation on stderr, structured exit
+code/reporting conventions, durable scheduled tasks, and CI examples.
 
 ### Cloud/Background Tasks
 
@@ -487,8 +471,9 @@ Claude Code's most important product lesson is feature separation:
 - Hooks automate lifecycle events.
 - Plugins package reusable combinations.
 
-OCC already has pieces of this but needs sharper loading rules and a real plugin
-runtime.
+OCC has the core separation now: always-on memory, metadata-first/on-demand
+skills, MCP stdio, custom subagent roles, command hooks, and runtime plugin
+hooks. The next boundary is packaging and policy/isolation for extensions.
 
 ### Scheduled Tasks And `/loop`
 
@@ -541,14 +526,11 @@ Claude Code supports custom subagent files with metadata such as model,
 permission mode, tools, MCP servers, hooks, skills, memory, max turns,
 background behavior, and isolation.
 
-OCC implementation ideas:
-
-- Add `.occ/agents/code-reviewer.md`, `.occ/agents/test-runner.md`,
-  `.occ/agents/security-auditor.md`.
-- Create an `AgentRegistry`.
-- Add `spawn_agent` parameters for `agent_name`, `task`, `model`, `policy`,
-  `max_turns`, and `background`.
-- Persist subagent transcripts separately.
+OCC status: `AgentRegistry` reads `.occ/agents/*.md`, and a spawned child can
+select a named role with its model, tool allowlist, permission mode, and max
+turns. Child histories and optional sessions are isolated. Remaining work is
+role templates, memory, background jobs, worktrees, and richer management
+commands.
 
 ### Persistent Agent Memory
 
@@ -603,82 +585,96 @@ OCC implementation ideas:
 
 Goal: make the documented features true and safe.
 
-- Fix MCP tool callable registration.
-- Wire plugins into the runtime or remove plugin claims from docs until wired.
-- Enforce read-only tool policy during plan generation.
-- Respect `context_compaction`.
-- Respect `max_tool_output`.
-- Add path sandboxing for all filesystem tools.
-- Add structured shell policy.
-- Add tests for the above.
-- Fix README and `IMPROVEMENTS.md` encoding/emoji portability if Windows
+**Status: substantially complete.** MCP wrappers, plugin lifecycle wiring,
+plan allowlisting, compaction configuration, output limits, workspace roots,
+and coarse shell policy are implemented and covered by focused tests. Keep the
+remaining portability/documentation work in normal maintenance.
+
+- [x] Fix MCP tool callable registration.
+- [x] Wire plugins into the runtime.
+- [x] Enforce read-only tool availability during plan generation.
+- [x] Respect `context_compaction`.
+- [x] Respect `max_tool_output`.
+- [x] Add path sandboxing for all filesystem tools.
+- [x] Add coarse structured shell policy.
+- [x] Add regression tests for the implemented behavior.
+- [ ] Fix README and `IMPROVEMENTS.md` encoding/emoji portability if Windows
   terminals remain a target.
 
 ### Phase 1: Trust Layer
 
 Goal: users should feel safe letting OCC edit code.
 
-- Add file snapshots before every write/edit.
-- Add `/undo` and `undo_edit` tool.
-- Add colorized diffs after edits.
-- Add `multi_edit` and `apply_patch` tools.
-- Add edit transaction grouping: start, preview diff, commit, rollback.
-- Add immutable file-change events in transcripts.
+**Status: core implementation complete; hardening remains.** Snapshots, undo,
+unified diffs, multi-edit, unified patches, and capability modes are live.
+Transaction preview/commit, immutable change events, and granular approval
+rules are still planned.
+
+- [x] Add file snapshots before every write/edit.
+- [x] Add `/undo` and `undo_edit` tool.
+- [x] Add unified diffs after edits (colorized display remains pending).
+- [x] Add `multi_edit` and `apply_patch` tools.
+- [ ] Add edit transaction grouping: start, preview diff, commit, rollback.
+- [ ] Add immutable file-change events in transcripts.
 - Add policy modes:
   - `read-only`
   - `suggest`
   - `workspace-write`
   - `full-access`
-- Add per-tool and per-path approval rules.
+- [ ] Add per-tool and per-path approval rules.
 
 ### Phase 2: Streaming And Sessions
 
 Goal: make OCC feel fast and professional.
 
-- Add provider streaming.
-- Add token/progress events.
-- Add command output streaming.
-- Add local JSONL transcripts.
-- Add `/status`, `/cost`, `/sessions`, `/resume`, `/export`.
-- Add usage/cost accounting for all providers.
-- Add retry/backoff and rate-limit messages.
+**Status: partial.** Provider streaming, token/tool/usage events, JSONL
+history, `/status`, `/sessions`, CLI resume, `/rename`, `/export`, and retry
+backoff are implemented. `/cost`, cost calculation, complete structured
+transcripts, and command-output streaming remain.
+
+- [x] Add provider streaming and token/tool/usage events.
+- [ ] Add command output streaming.
+- [x] Add local JSONL transcripts, `/status`, `/sessions`, CLI `--resume`,
+  `/rename`, and `/export`.
+- [ ] Add `/cost` and usage/cost accounting for all providers.
+- [x] Add retry/backoff and provider-failure events.
 
 ### Phase 3: Automation Runtime
 
 Goal: make OCC useful outside an interactive terminal.
 
-- Add `occ exec`.
-- Add `--json` event stream.
-- Add structured output schema.
-- Add `--output-last-message`.
-- Add `--ephemeral`.
+**Status: partial.** `occ exec`, `--json`, `--output-last-message`,
+`--output-schema`, `--ephemeral`, sandbox selection, and approval-mode flags
+are implemented. Scheduling, durable task storage, GitHub Actions, and
+notification hooks remain.
+
+- [x] Add `occ exec`.
+- [x] Add `--json` event stream.
+- [x] Add structured output schema.
+- [x] Add `--output-last-message`.
+- [x] Add `--ephemeral`.
 - Add scheduler:
   - `/loop`
   - `/remind`
   - `/tasks`
   - task SQLite store
-- Add GitHub Action.
-- Add hook runtime.
-- Add notification hooks.
+- [ ] Add GitHub Action.
+- [x] Add trusted command hook runtime.
+- [ ] Add notification hooks.
 
 ### Phase 4: Git And Review Workflows
 
 Goal: make daily coding workflows first-class.
 
+**Status: started.** Read-only Git inspection and `/changes` are implemented;
+all mutation, review, PR, CI, and worktree workflows remain planned.
+
 - Add tools:
-  - `git_status`
-  - `git_diff`
-  - `git_log`
-  - `git_branch`
-  - `git_commit`
-  - `git_stash`
-  - `git_apply_patch`
+  - [x] `git_status`, `git_diff`, `git_log`, `git_branch`
+  - [ ] `git_commit`, `git_stash`, `git_apply_patch`
 - Add slash commands:
-  - `/review`
-  - `/commit`
-  - `/pr`
-  - `/branch`
-  - `/changes`
+  - [ ] `/review`, `/commit`, `/pr`, `/branch`
+  - [x] `/changes`
 - Add GitHub integration through CLI/API/MCP.
 - Add PR description generation.
 - Add CI failure triage.
@@ -708,10 +704,15 @@ Goal: make OCC better at understanding large codebases.
 
 Goal: parallelize large work without losing control.
 
-- Add custom agent definitions.
-- Add subagent memory.
-- Add agent transcripts and resume.
-- Add background agents.
+**Status: started.** Custom role definitions, policy/tool constraints,
+isolated child sessions, and concurrent fan-out are implemented. Memory,
+background execution, worktrees, coordinator strategy, and verification agents
+remain planned.
+
+- [x] Add custom agent definitions.
+- [ ] Add subagent memory.
+- [x] Add isolated subagent transcripts/sessions (direct resume is pending).
+- [ ] Add background agents.
 - Add coordinator that can fan out research/review tasks and synthesize.
 - Add explicit "best-of-N implementation attempts" using worktrees.
 - Add reviewer/verifier agents that run after changes.
@@ -730,9 +731,12 @@ Goal: make OCC available where developers already work.
 
 ## Suggested Architecture Changes
 
-### Add `ToolContext`
+### Add `ToolContext` — Implemented
 
-Every tool should receive a context object:
+Runtime-bound built-in tools now receive a context object. The implementation
+contains workspace/writable roots, shell and web policy, output limits,
+snapshot storage, session ID, and event bus (rather than the earlier proposed
+`config`/`policy` fields directly).
 
 ```python
 @dataclass
@@ -752,10 +756,10 @@ Benefits:
 - Makes testing policy behavior easier.
 - Supports per-session artifacts.
 
-### Add `ToolPolicy`
+### Add `ToolPolicy` — Implemented
 
-Policy should decide whether a tool call is allowed, requires approval, or is
-denied before execution.
+`ToolPolicy` decides whether a tool is denied before approval is requested.
+Approval itself remains the responsibility of the event bus/listener layer.
 
 Inputs:
 
@@ -773,9 +777,10 @@ Outputs:
 - require approval with reason
 - deny with reason
 
-### Add `SessionStore`
+### Add `SessionStore` — Partial
 
-Use JSONL for append-only transcripts and SQLite for indexed state.
+The JSONL ledger and metadata snapshot are implemented. SQLite indexing and
+task state are not.
 
 Files:
 
@@ -799,9 +804,10 @@ Events to persist:
 - usage updated
 - task scheduled/fired/completed
 
-### Add `ProviderStreamEvent`
+### Add `ProviderStreamEvent` — Implemented
 
-Normalize provider streaming across Anthropic, OpenAI, Gemini, Groq, and Ollama:
+Provider responses and streams are normalized across Anthropic, OpenAI, Gemini,
+Groq, and Ollama:
 
 - `message_start`
 - `content_delta`
@@ -815,9 +821,11 @@ Normalize provider streaming across Anthropic, OpenAI, Gemini, Groq, and Ollama:
 The agent loop should consume streams and produce the same final
 `ProviderResponse` for history.
 
-### Add `AutomationRunner`
+### Add `AutomationRunner` — Partial
 
-This should run both interactive scheduled tasks and `occ exec`.
+`main.py` provides the current `occ exec` runner. A shared automation runner
+for interactive scheduled tasks, cancellation, and durable task state remains
+to be designed.
 
 Responsibilities:
 
@@ -908,43 +916,46 @@ Expose as `/verify`, `/ship`, and stop hooks.
 
 ## Quick Wins
 
-Small changes with high impact:
+Completed quick wins:
 
-- Fix MCP callable registration.
-- Add `--version`.
-- Add `/status` with model, mode, cwd, session ID, token estimate, config path.
-- Add `git_diff` read-only tool.
-- Show unified diff after `edit_file` and `write_file`.
-- Add file snapshots for `edit_file` and `write_file`.
-- Add `read_file` offset/limit and line numbers.
-- Add `list_directory` ignore defaults for `.git`, `.venv`, `node_modules`,
-  `dist`, `build`, and caches.
-- Add command timeout display and exit status colorization.
-- Add `--quiet` and `--verbose`.
-- Add shell completions.
-- Add slash command completion.
-- Add `occ doctor` to validate API keys, provider availability, git repo, MCP
-  servers, and common dependencies.
+- MCP callable registration, `--version`, `/status`, `git_diff`, unified
+  edit/write diffs, file snapshots and undo, configurable `read_file`
+  offset/limit/line numbers, `--quiet`, and non-interactive automation flags.
+
+Best remaining small changes:
+
+- Add default directory ignores for `.git`, virtual environments, dependency
+  folders, builds, and caches.
+- Display command timeout/exit status consistently in the TUI and stream long
+  command output.
+- Add shell and slash-command completion.
+- Add `occ doctor` for API keys, provider availability, Git, MCP, and common
+  dependency diagnostics.
+- Add `/cost` from the existing usage events.
 
 ## Testing Improvements
 
 Current tests cover many units, but the next phase needs integration and
 behavior tests.
 
-Add tests for:
+Already covered by focused regression tests:
 
-- MCP wrapper invokes fake server tool successfully.
-- Plan mode cannot execute write/edit/shell during planning.
-- `context_compaction=False` prevents compaction.
-- Tool output limit honors config.
-- Path sandbox denies reads/writes outside workspace.
-- Shell policy denies destructive commands in read-only mode.
-- File snapshots are created and undo restores content.
-- Streaming providers produce stable event order.
-- Session JSONL can replay into final history.
-- `occ exec --json` emits valid JSON lines.
-- Hooks can allow, deny, and modify tool results.
-- Scheduled task fires and persists across resume when expected.
+- MCP callable wrappers; compaction disablement; output limits; root sandbox;
+  shell policy; snapshots/undo; multi-edit/patch atomicity; stream usage and
+  retry; session replay/rename/export; skills; custom-agent definitions; and
+  plugin lifecycle wiring.
+
+Add or strengthen tests for:
+
+- Plan-mode denials from an actual model tool-call response, not just registry
+  selection.
+- Stable streaming event order for every provider implementation.
+- `occ exec --json`, output-schema validation, and exit codes as CLI-level
+  integration tests.
+- Hook denial, timeout, stdout/stderr capture, and post-edit failure behavior.
+- Shell segment classification and process-tree cleanup.
+- Web redirect/DNS-rebinding defenses and cache-policy behavior.
+- Scheduler persistence once scheduled tasks exist.
 
 Also add end-to-end tests with a fake provider that scripts:
 
@@ -977,16 +988,21 @@ Update docs to include:
 
 ## Recommended Next 10 Pull Requests
 
-1. Fix MCP tool wrapper and add tests.
-2. Add runtime tool policy and enforce read-only plan mode.
-3. Add file snapshots and colorized diffs for write/edit.
-4. Add `ProviderUsage`, usage events, and `/cost`.
-5. Add streaming provider protocol and UI token rendering.
-6. Add session JSONL transcripts and `/resume`.
-7. Add `occ exec` with final stdout and progress stderr.
-8. Add `--json` event output and structured final output option.
-9. Wire `PluginMiddleware` and hook dispatch.
-10. Add `/loop`, `/remind`, and task persistence.
+1. Add cost tables, `/cost`, per-run budgets, and provider usage integration
+   tests.
+2. Make shell policy segment-aware; add env/network controls and process-group
+   cleanup.
+3. Stream command stdout/stderr and persist long output as session artifacts.
+4. Add redirect-safe DNS/IP validation plus web cache and domain-policy tests.
+5. Record file changes, snapshots, approvals, plans, and provider metadata as
+   complete structured session evidence.
+6. Add `/review` and `occ review --json` using the existing read-only Git
+   tools.
+7. Add Git mutation workflows behind explicit policy/approval gates.
+8. Introduce a scheduler with `/loop`, `/remind`, `/tasks`, and durable task
+   storage.
+9. Add a GitHub Action built on the mature `occ exec --json` path.
+10. Add worktree-backed/background subagents and a verifier role after edits.
 
 If the goal is to become "the best AI coding agent available", do these before
 new UI surfaces. Trust, safety, automation, and resumability are the foundation
