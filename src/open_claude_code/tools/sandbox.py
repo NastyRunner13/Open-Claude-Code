@@ -2,8 +2,10 @@
 
 import asyncio
 import os
+import sys
 import tempfile
 
+from open_claude_code.tools.context import ToolContext
 from open_claude_code.tools.result import ToolResult
 
 MAX_OUTPUT = 10000
@@ -38,8 +40,14 @@ SCHEMA = {
 }
 
 
-async def sandbox(code: str, language: str = "python", timeout: int = 30) -> ToolResult:
+async def sandbox(
+    code: str,
+    language: str = "python",
+    timeout: int = 30,
+    _context: ToolContext | None = None,
+) -> ToolResult:
     """Run code in an isolated sandbox."""
+    max_output = _context.max_output if _context else MAX_OUTPUT
     if language != "python":
         return ToolResult.fail(
             f"unsupported language '{language}'. Currently only 'python' is supported.",
@@ -55,10 +63,7 @@ async def sandbox(code: str, language: str = "python", timeout: int = 30) -> Too
 
     try:
         # Run in subprocess
-        if os.name == "nt":
-            cmd = f"python {temp_path}"
-        else:
-            cmd = f"python3 {temp_path}"
+        cmd = f'"{sys.executable}" "{temp_path}"'
 
         process = await asyncio.create_subprocess_shell(
             cmd,
@@ -89,9 +94,9 @@ async def sandbox(code: str, language: str = "python", timeout: int = 30) -> Too
         if err:
             result_text += f"stderr:\n{err}"
 
-        truncated = len(result_text) > MAX_OUTPUT
+        truncated = len(result_text) > max_output
         if truncated:
-            result_text = result_text[:MAX_OUTPUT] + "\n[truncated]"
+            result_text = result_text[:max_output] + "\n[truncated]"
 
         return ToolResult(
             success=exit_code == 0,

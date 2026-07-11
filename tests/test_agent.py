@@ -3,7 +3,8 @@
 import asyncio
 
 from open_claude_code.agent import Agent
-from open_claude_code.events import EventBus, PostToolUse, Stop, SubagentStart, SubagentStop, Thinking
+from open_claude_code.config import AgentConfig
+from open_claude_code.events import EventBus, PostToolUse, Stop, SubagentStart, SubagentStop, Thinking, ToolDenied
 from open_claude_code.providers.base import Provider, ProviderResponse, TextBlock, ThinkingBlock, ToolUseBlock
 
 
@@ -202,3 +203,106 @@ def test_unknown_tool():
     agent = Agent(provider=provider, event_bus=bus, tools={})
     result = asyncio.run(agent.run("test"))
     assert result == "OK"
+
+
+def test_context_compaction_can_be_disabled():
+    """Agent respects AgentConfig.context_compaction=False."""
+    provider = MockProvider([
+        ProviderResponse(thinking=None, content=[TextBlock(text="OK")])
+    ])
+
+    bus = EventBus()
+    agent = Agent(
+        provider=provider,
+        event_bus=bus,
+        tools={},
+        config=AgentConfig(context_compaction=False),
+    )
+    called = False
+
+    async def fail_if_called(history):
+        nonlocal called
+        called = True
+        return history
+
+    agent._context_mgr.auto_compact_async = fail_if_called  # type: ignore[method-assign]
+
+    result = asyncio.run(agent.run("do not compact"))
+    assert result == "OK"
+    assert called is False
+
+
+def test_disallowed_tool_is_blocked_before_approval():
+    """A policy denial cannot be bypassed by the default approval behavior."""
+    calls = []
+    denials = []
+
+    async def dangerous_tool() -> str:
+        calls.append(True)
+        return "should not run"
+
+    async def collect(event):
+        denials.append(event)
+
+    provider = MockProvider([
+        ProviderResponse(thinking=None, content=[
+            ToolUseBlock(id="t1", name="dangerous", input={})
+        ]),
+        ProviderResponse(thinking=None, content=[TextBlock(text="Policy respected")]),
+    ])
+    bus = EventBus()
+    bus.on(ToolDenied, collect)
+    agent = Agent(
+        provider=provider,
+        event_bus=bus,
+        tools={
+            "dangerous": {
+                "function": dangerous_tool,
+                "schema": {"name": "dangerous", "input_schema": {"type": "object"}},
+            }
+        },
+        config=AgentConfig(disallowed_tools=["dangerous"]),
+    )
+
+    assert asyncio.run(agent.run("do the thing")) == "Policy respected"
+    assert calls == []
+    assert len(denials) == 1
+    assert denials[0].tool_name == "dangerous"
+
+
+def test_subagent_is_read_only_by_default():
+    """Child agents cannot write even if the parent has workspace-write access."""
+    writes = []
+
+    async def write_file(file_path: str, content: str) -> str:
+        writes.append((file_path, content))
+        return "written"
+
+    provider = MockProvider([
+        ProviderResponse(thinking=None, content=[
+            ToolUseBlock(id="spawn-1", name="spawn_agent", input={"task": "investigate"})
+        ]),
+        ProviderResponse(thinking=None, content=[
+            ToolUseBlock(
+                id="write-1",
+                name="write_file",
+                input={"file_path": "unsafe.txt", "content": "no"},
+            )
+        ]),
+        ProviderResponse(thinking=None, content=[TextBlock(text="Investigation complete")]),
+        ProviderResponse(thinking=None, content=[TextBlock(text="Parent complete")]),
+    ])
+    tools = {
+        "spawn_agent": {
+            "function": None,
+            "schema": {"name": "spawn_agent", "input_schema": {"type": "object"}},
+        },
+        "write_file": {
+            "function": write_file,
+            "schema": {"name": "write_file", "input_schema": {"type": "object"}},
+        },
+    }
+
+    agent = Agent(provider=provider, event_bus=EventBus(), tools=tools, config=AgentConfig())
+    assert asyncio.run(agent.run("delegate this")) == "Parent complete"
+    assert writes == []

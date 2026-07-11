@@ -8,7 +8,9 @@ import uuid
 from .base import (
     Provider,
     ProviderError,
+    ProviderMetadata,
     ProviderResponse,
+    ProviderUsage,
     TextBlock,
     ThinkingBlock,
     ToolUseBlock,
@@ -157,7 +159,7 @@ class GeminiProvider(Provider):
         except ProviderError:
             raise
         except Exception as e:
-            raise ProviderError(str(e)) from e
+            raise ProviderError.from_exception(e) from e
 
         # Parse response
         content: list[TextBlock | ToolUseBlock] = []
@@ -187,4 +189,21 @@ class GeminiProvider(Provider):
         if not content and hasattr(response, "text") and response.text:
             content.append(TextBlock(text=response.text))
 
-        return ProviderResponse(thinking=thinking, content=content)
+        usage = getattr(response, "usage_metadata", None)
+        finish_reason = ""
+        if response.candidates:
+            finish_reason = str(getattr(response.candidates[0], "finish_reason", "") or "")
+        return ProviderResponse(
+            thinking=thinking,
+            content=content,
+            usage=ProviderUsage(
+                input_tokens=int(getattr(usage, "prompt_token_count", 0) or 0),
+                output_tokens=int(getattr(usage, "candidates_token_count", 0) or 0),
+                cache_read_tokens=int(getattr(usage, "cached_content_token_count", 0) or 0),
+            ),
+            metadata=ProviderMetadata(
+                request_id=str(getattr(response, "response_id", "") or ""),
+                finish_reason=finish_reason,
+                model=self.model,
+            ),
+        )

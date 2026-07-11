@@ -59,8 +59,9 @@ class SkillsMiddleware(Middleware):
         }
 
     def get_prompt_additions(self) -> str:
-        """Return loaded skill instructions for prompt injection."""
-        return self._manager.get_prompt_additions()
+        """List lightweight skill metadata, then include only explicitly loaded bodies."""
+        parts = [self._manager.get_catalog_prompt(), self._manager.get_prompt_additions()]
+        return "\n\n".join(part for part in parts if part)
 
     def handle_slash_command(self, cmd: str, rest: str) -> str | None:
         """Handle /skill slash commands."""

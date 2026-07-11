@@ -4,7 +4,12 @@ import asyncio
 
 import pytest
 
+from open_claude_code.agent import Agent
+from open_claude_code.config import AgentConfig
+from open_claude_code.events import EventBus
 from open_claude_code.middleware import Middleware, MiddlewareManager
+from open_claude_code.middleware.plugins import PluginMiddleware
+from open_claude_code.providers.base import Provider, ProviderResponse, TextBlock, ToolUseBlock
 
 
 class DummyMiddleware(Middleware):
@@ -194,3 +199,77 @@ def test_add_middleware():
 
     assert mgr.get("late") is mw
     assert len(mgr.middlewares) == 1
+
+
+class MockProvider(Provider):
+    def __init__(self, responses):
+        self.responses = list(responses)
+
+    @property
+    def model_name(self) -> str:
+        return "mock"
+
+    async def send(self, messages, tools, system_prompt):
+        return self.responses.pop(0)
+
+
+@pytest.mark.asyncio
+async def test_plugin_middleware_wires_runtime_hooks(tmp_path):
+    plugin_root = tmp_path / "plugins"
+    plugin_dir = plugin_root / "hook-plugin"
+    plugin_dir.mkdir(parents=True)
+    log_file = tmp_path / "plugin.log"
+    plugin_dir.joinpath("plugin.py").write_text(
+        "from pathlib import Path\n"
+        f"LOG = Path({str(log_file)!r})\n"
+        "PLUGIN_NAME = 'Hook Plugin'\n"
+        "def register(hooks):\n"
+        "    async def on_start(**kwargs):\n"
+        "        LOG.write_text('start\\n')\n"
+        "    async def before_send(messages, tools):\n"
+        "        LOG.write_text(LOG.read_text() + 'before\\n')\n"
+        "    async def after_response(response):\n"
+        "        LOG.write_text(LOG.read_text() + 'after\\n')\n"
+        "    async def on_tool_result(tool_name, result, **kwargs):\n"
+        "        LOG.write_text(LOG.read_text() + f'tool:{tool_name}\\n')\n"
+        "        return f'plugin:{result}'\n"
+        "    async def on_stop(**kwargs):\n"
+        "        LOG.write_text(LOG.read_text() + 'stop\\n')\n"
+        "    hooks.on_agent_start(on_start)\n"
+        "    hooks.on_before_send(before_send)\n"
+        "    hooks.on_after_response(after_response)\n"
+        "    hooks.on_tool_result(on_tool_result)\n"
+        "    hooks.on_agent_stop(on_stop)\n",
+        encoding="utf-8",
+    )
+
+    async def echo():
+        return "result"
+
+    provider = MockProvider([
+        ProviderResponse(thinking=None, content=[
+            ToolUseBlock(id="t1", name="echo", input={})
+        ]),
+        ProviderResponse(thinking=None, content=[TextBlock(text="done")]),
+    ])
+    tools = {
+        "echo": {
+            "function": echo,
+            "schema": {"name": "echo", "description": "", "input_schema": {}},
+        }
+    }
+    plugin_mw = PluginMiddleware(config=AgentConfig(plugins_dirs=[str(plugin_root)]))
+    mgr = MiddlewareManager([plugin_mw])
+    agent = Agent(provider=provider, event_bus=EventBus(), tools=tools, middleware_manager=mgr)
+
+    await agent.initialize()
+    await agent.run("use tool")
+    await mgr.shutdown()
+
+    log = log_file.read_text(encoding="utf-8")
+    assert "start" in log
+    assert "before" in log
+    assert "after" in log
+    assert "tool:echo" in log
+    assert "stop" in log
+    assert "plugin:result" in str(agent.history)

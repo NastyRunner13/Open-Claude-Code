@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
+import sys
+from dataclasses import asdict, is_dataclass
+from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
@@ -16,7 +20,10 @@ from prompt_toolkit import PromptSession, HTML
 from open_claude_code import __version__
 from open_claude_code.agent import Agent
 from open_claude_code.config import AgentConfig, load_config, save_config
-from open_claude_code.events import EventBus
+from open_claude_code.events import (
+    EventBus, Error, PostToolUse, PreToolUse, Stop, Thinking, ToolDenied,
+    TokenDelta, ToolCallDelta, UsageUpdated, ProviderFailure,
+)
 from open_claude_code.listeners import (
     register_approval_listener,
     register_logging_listeners,
@@ -25,10 +32,14 @@ from open_claude_code.listeners import (
 from open_claude_code.middleware import MiddlewareManager
 from open_claude_code.middleware.mcp import MCPMiddleware
 from open_claude_code.middleware.memory import MemoryMiddleware
+from open_claude_code.middleware.hooks import HooksMiddleware
+from open_claude_code.middleware.plugins import PluginMiddleware
 from open_claude_code.middleware.skills import SkillsMiddleware
 from open_claude_code.modes import run_mode
 from open_claude_code.planning import PlanningMiddleware
 from open_claude_code.providers import ProviderError, create_provider
+from open_claude_code.sessions import SessionStore
+from open_claude_code.subagents import AgentRegistry
 from open_claude_code.system_prompt import MODE_PROMPTS
 from open_claude_code.tools import get_tools
 
@@ -78,6 +89,30 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Custom API base URL (for OpenAI-compatible endpoints like OpenRouter)",
     )
+    parser.add_argument(
+        "--resume",
+        default=None,
+        metavar="SESSION_ID",
+        help="Resume a durable session from .occ/sessions",
+    )
+    parser.add_argument("--version", action="version", version=f"Open Claude Code {__version__}")
+    parser.add_argument("--json", action="store_true", help="Emit lifecycle events as JSON Lines (exec mode).")
+    parser.add_argument("--output-last-message", metavar="PATH", help="Write the final assistant message to PATH (exec mode).")
+    parser.add_argument("--output-schema", metavar="PATH", help="Validate the final exec message against a JSON schema subset.")
+    parser.add_argument("--ephemeral", action="store_true", help="Do not write session or snapshot artifacts for this run.")
+    parser.add_argument("--quiet", action="store_true", help="Suppress non-final exec progress output.")
+    parser.add_argument(
+        "--sandbox",
+        choices=["read-only", "workspace-write", "full-access"],
+        help="Runtime capability sandbox; policy denials cannot be bypassed by approval flags.",
+    )
+    parser.add_argument(
+        "--approval-mode",
+        choices=["suggest", "auto", "full-access"],
+        help="Exec approval mode: deny privileged calls, auto-approve permitted calls, or full access.",
+    )
+    parser.add_argument("command", nargs="?", choices=["exec"], help="Run a non-interactive task.")
+    parser.add_argument("task", nargs="?", help="Task text for `occ exec`.")
     return parser.parse_args()
 
 
@@ -106,7 +141,107 @@ def resolve_config(args: argparse.Namespace) -> AgentConfig:
     if args.base_url:
         config.base_url = args.base_url
 
+    if args.ephemeral:
+        config.persist_sessions = False
+        config.persist_snapshots = False
+    if args.sandbox:
+        config.permission_mode = args.sandbox
+        config.shell_policy = args.sandbox
+    if args.approval_mode == "auto":
+        config.skip_approval = True
+    elif args.approval_mode == "full-access":
+        config.skip_approval = True
+        config.permission_mode = "full-access"
+        config.shell_policy = "full-access"
+
     return config
+
+
+def _json_value(value: object) -> object:
+    if is_dataclass(value):
+        return _json_value(asdict(value))
+    if isinstance(value, dict):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_value(item) for item in value]
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def register_json_listeners(event_bus: EventBus) -> None:
+    """Write automation-safe lifecycle events as one JSON object per line."""
+    async def emit(event: object) -> None:
+        payload = {"type": type(event).__name__, "data": _json_value(event)}
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True), flush=True)
+
+    for event_type in (
+        Thinking, TokenDelta, ToolCallDelta, UsageUpdated,
+        PreToolUse, PostToolUse, ToolDenied, ProviderFailure, Error,
+    ):
+        event_bus.on(event_type, emit)
+
+    async def emit_final(event: Stop) -> None:
+        print(json.dumps({"type": "final", "data": {"text": event.text}}, ensure_ascii=False), flush=True)
+
+    event_bus.on(Stop, emit_final)
+
+
+def _validate_schema(value: object, schema: dict, label: str = "response") -> None:
+    """Deliberately small JSON-schema validator for automation output contracts."""
+    expected = schema.get("type")
+    type_matches = {
+        "object": isinstance(value, dict),
+        "array": isinstance(value, list),
+        "string": isinstance(value, str),
+        "number": isinstance(value, (int, float)) and not isinstance(value, bool),
+        "integer": isinstance(value, int) and not isinstance(value, bool),
+        "boolean": isinstance(value, bool),
+    }
+    if expected and not type_matches.get(expected, True):
+        raise ValueError(f"{label} must be a JSON {expected}")
+    if isinstance(value, dict):
+        for required in schema.get("required", []):
+            if required not in value:
+                raise ValueError(f"{label} is missing required property '{required}'")
+        for name, child_schema in schema.get("properties", {}).items():
+            if name in value and isinstance(child_schema, dict):
+                _validate_schema(value[name], child_schema, f"{label}.{name}")
+
+
+async def _run_exec(
+    args: argparse.Namespace,
+    config: AgentConfig,
+    agent: Agent,
+    middleware_mgr: MiddlewareManager,
+    session_store: SessionStore | None,
+) -> None:
+    """Run one task without an interactive terminal, suitable for scripts and CI."""
+    if not args.task:
+        raise ValueError("occ exec requires a task argument")
+    try:
+        result = await agent.run(args.task)
+        if args.output_schema:
+            schema = json.loads(Path(args.output_schema).read_text(encoding="utf-8"))
+            try:
+                structured = json.loads(result)
+            except json.JSONDecodeError as exc:
+                raise ValueError("final response is not valid JSON for --output-schema") from exc
+            if not isinstance(schema, dict):
+                raise ValueError("--output-schema must contain a JSON object")
+            _validate_schema(structured, schema)
+        if args.output_last_message:
+            Path(args.output_last_message).write_text(result + "\n", encoding="utf-8")
+        if not args.json:
+            print(result)
+    finally:
+        try:
+            await middleware_mgr.shutdown()
+        finally:
+            if session_store:
+                session_store.close()
 
 
 def print_splash(config: AgentConfig, middleware_mgr: "MiddlewareManager | None" = None) -> None:
@@ -244,6 +379,7 @@ async def handle_slash_command(
     config: AgentConfig,
     agent: Agent,
     middleware_mgr: MiddlewareManager,
+    session_store: SessionStore | None = None,
 ) -> str | None:
     """Handle slash commands. Returns:
       - None if not handled (pass through to mode router)
@@ -265,6 +401,7 @@ async def handle_slash_command(
         help_table.add_row("/mode", "Show current mode")
         help_table.add_row("/mode <mode>", "Switch default mode (ask | plan | agent)")
         help_table.add_row("/skill", "Manage skills (list | load <name> | unload <name> | reload)")
+        help_table.add_row("/plugin", "Manage plugins (list | reload)")
         help_table.add_row("/mcp", "Manage MCP servers (list | add <name> <cmd> [args] | remove <name>)")
         help_table.add_row("/plan show", "Show current plan/checklist")
         help_table.add_row("/plan progress", "Show plan progress bar")
@@ -272,6 +409,13 @@ async def handle_slash_command(
         help_table.add_row("/memory", "List loaded memory files (AGENTS.md, CLAUDE.md, etc.)")
         help_table.add_row("/memory reload", "Rescan for memory files")
         help_table.add_row("/memory show", "Preview loaded memory content")
+        help_table.add_row("/status", "Show model, permissions, context, and session details")
+        help_table.add_row("/sessions", "List durable local sessions")
+        help_table.add_row("/changes", "Show current Git status and uncommitted diff")
+        help_table.add_row("/undo <file>", "Restore the latest OCC snapshot for a file")
+        help_table.add_row("/rename <title>", "Give the current durable session a title")
+        help_table.add_row("/export <path>", "Export current session as a JSON task capsule")
+        help_table.add_row("/agent list", "List reusable .occ/agents role definitions")
         help_table.add_row("/clear", "Clear conversation history")
         help_table.add_row("/help", "Show this help")
         console.print(help_table)
@@ -295,6 +439,120 @@ async def handle_slash_command(
     if cmd == "/clear":
         agent.history.clear()
         console.print("  Conversation history cleared.", style="dim")
+        console.print()
+        return "handled"
+
+    if cmd == "/status":
+        context = agent._context_mgr.get_stats(agent.history)
+        console.print()
+        console.print(f"  Model: [bold cyan]{config.model}[/]")
+        console.print(f"  Mode: [bold]{config.mode}[/]  Permission: [bold]{agent.tool_policy.mode}[/]")
+        console.print(
+            f"  Context: {context.estimated_tokens:,}/{context.max_context_tokens:,} tokens "
+            f"({context.utilization:.0%})"
+        )
+        if session_store:
+            console.print(f"  Session: [bold green]{session_store.session_id}[/]")
+        else:
+            console.print("  Session: [dim]ephemeral (persistence disabled)[/]")
+        console.print()
+        return "handled"
+
+    if cmd == "/sessions":
+        sessions = SessionStore.list_sessions(config)
+        console.print()
+        if not sessions:
+            console.print("  No durable sessions found.", style="dim")
+        else:
+            table = Table(show_header=True, header_style="bold cyan")
+            table.add_column("Session")
+            table.add_column("Model")
+            table.add_column("Mode")
+            table.add_column("Status")
+            table.add_column("Updated")
+            for item in sessions[:20]:
+                table.add_row(
+                    str(item.get("session_id", "")),
+                    str(item.get("model", "")),
+                    str(item.get("mode", "")),
+                    str(item.get("status", "")),
+                    str(item.get("updated_at", "")),
+                )
+            console.print(table)
+            if len(sessions) > 20:
+                console.print(f"  Showing 20 of {len(sessions)} sessions.", style="dim")
+        console.print()
+        return "handled"
+
+    if cmd == "/changes":
+        status = await agent.tools["git_status"]["function"]()
+        diff = await agent.tools["git_diff"]["function"]()
+        console.print()
+        console.print(str(status))
+        console.print()
+        console.print(str(diff))
+        console.print()
+        return "handled"
+
+    if cmd == "/undo":
+        if not rest:
+            console.print("  Usage: /undo <file_path>", style="dim")
+        else:
+            result = await agent.tools["undo_edit"]["function"](file_path=rest)
+            console.print(f"  {result}")
+        console.print()
+        return "handled"
+
+    if cmd == "/rename":
+        if session_store is None:
+            console.print("  Session persistence is disabled.", style="dim")
+        elif not rest:
+            console.print("  Usage: /rename <title>", style="dim")
+        else:
+            try:
+                session_store.rename(rest)
+                console.print(f"  Session renamed: [bold]{session_store.metadata['title']}[/]")
+            except ValueError as exc:
+                console.print(f"  {exc}", style="red")
+        console.print()
+        return "handled"
+
+    if cmd == "/export":
+        if session_store is None:
+            console.print("  Session persistence is disabled.", style="dim")
+        elif not rest:
+            console.print("  Usage: /export <path>", style="dim")
+        else:
+            try:
+                destination = session_store.export(rest)
+                console.print(f"  Exported task capsule: [bold green]{destination}[/]")
+            except OSError as exc:
+                console.print(f"  Export failed: {exc}", style="red")
+        console.print()
+        return "handled"
+
+    if cmd == "/agent":
+        if rest not in {"", "list"}:
+            console.print("  Usage: /agent [list]", style="dim")
+        else:
+            registry = AgentRegistry(search_dirs=config.agents_dirs)
+            definitions = registry.definitions
+            if not definitions:
+                console.print("  No role definitions found in .occ/agents.", style="dim")
+            else:
+                table = Table(show_header=True, header_style="bold cyan")
+                table.add_column("Name")
+                table.add_column("Permission")
+                table.add_column("Max turns")
+                table.add_column("Description")
+                for definition in definitions.values():
+                    table.add_row(
+                        definition.name,
+                        definition.permission_mode,
+                        str(definition.max_turns),
+                        definition.description,
+                    )
+                console.print(table)
         console.print()
         return "handled"
 
@@ -324,6 +582,23 @@ async def run() -> None:
     args = parse_args()
     config = resolve_config(args)
 
+    session_store: SessionStore | None = None
+    if args.resume:
+        session_store = SessionStore.resume(args.resume, config=config)
+        # A resumed task should keep its original model/mode unless the caller
+        # deliberately supplied an override for this invocation.
+        previous = session_store.metadata
+        if args.model is None and isinstance(previous.get("model"), str):
+            config.model = previous["model"]
+        if args.mode is None and previous.get("mode") in {"ask", "plan", "agent"}:
+            config.mode = previous["mode"]
+    elif config.persist_sessions:
+        session_store = SessionStore.create(
+            config=config,
+            model=config.model,
+            mode=config.mode,
+        )
+
     # Create provider
     provider = create_provider(
         model=config.model,
@@ -333,17 +608,28 @@ async def run() -> None:
         prompt_caching=config.prompt_caching,
     )
 
-    # Set up event bus and listeners
+    # Set up event bus and listeners. Exec uses machine-readable output and
+    # must never wait on a terminal approval prompt.
     event_bus = EventBus()
-    register_ui_listeners(event_bus)
-    register_approval_listener(event_bus, config=config)
-    register_logging_listeners(event_bus)
+    if args.command == "exec":
+        if args.json:
+            register_json_listeners(event_bus)
+        if args.approval_mode == "suggest":
+            async def deny_noninteractive(_event: PreToolUse) -> bool:
+                return False
+            event_bus.on_approval(deny_noninteractive)
+        else:
+            register_approval_listener(event_bus, config=config)
+    else:
+        register_ui_listeners(event_bus)
+        register_approval_listener(event_bus, config=config)
+        register_logging_listeners(event_bus)
 
     # Get system prompt for current mode
     system_prompt = MODE_PROMPTS.get(config.mode, MODE_PROMPTS["agent"])
 
     # Build middleware stack
-    # Order matters: memory first (stable context), then planning, skills, MCP
+    # Order matters: memory first, then planning, skills, hooks, plugins, MCP
     memory_mw = MemoryMiddleware(
         search_dirs=config.memory_dirs if config.memory_dirs else None
     )
@@ -351,12 +637,19 @@ async def run() -> None:
     skills_mw = SkillsMiddleware(
         search_dirs=config.skills_dirs if config.skills_dirs else None
     )
+    hooks_mw = HooksMiddleware(config=config)
+    plugin_mw = PluginMiddleware(config=config)
     mcp_mw = MCPMiddleware(config=config)
 
-    middleware_mgr = MiddlewareManager([memory_mw, planning_mw, skills_mw, mcp_mw])
+    middleware_mgr = MiddlewareManager([memory_mw, planning_mw, skills_mw, hooks_mw, plugin_mw, mcp_mw])
 
     # Get base tools (without skills — handled by middleware now)
-    tools = get_tools(skill_manager=skills_mw.manager)
+    tools = get_tools(
+        skill_manager=skills_mw.manager,
+        config=config,
+        event_bus=event_bus,
+        session_id=session_store.session_id if session_store else None,
+    )
 
     # Create agent with middleware
     agent = Agent(
@@ -366,16 +659,29 @@ async def run() -> None:
         system_prompt=system_prompt,
         config=config,
         middleware_manager=middleware_mgr,
+        session_store=session_store,
     )
+
+    if session_store and args.resume:
+        agent.history = session_store.load_history()
 
     # Initialize middleware (connects MCP servers, etc.)
     await agent.initialize()
 
     # Legacy compat — attach managers for any code that still accesses them
     agent._skill_manager = skills_mw.manager
+    agent._plugin_manager = plugin_mw.manager
     agent._mcp_manager = mcp_mw.manager
 
+    if args.command == "exec":
+        await _run_exec(args, config, agent, middleware_mgr, session_store)
+        return
+
     print_splash(config, middleware_mgr)
+    if session_store:
+        action = "Resumed" if args.resume else "Session"
+        console.print(f"  {action}: [dim]{session_store.session_id}[/]")
+        console.print()
 
     session = PromptSession()
 
@@ -409,7 +715,9 @@ async def run() -> None:
 
             # Handle slash commands
             if stripped.startswith("/"):
-                result = await handle_slash_command(stripped, config, agent, middleware_mgr)
+                result = await handle_slash_command(
+                    stripped, config, agent, middleware_mgr, session_store
+                )
                 if result == "handled":
                     continue
                 if result and ":" in result:
@@ -423,7 +731,11 @@ async def run() -> None:
             await run_mode(config.mode, agent, stripped)
             console.print()
     finally:
-        await middleware_mgr.shutdown()
+        try:
+            await middleware_mgr.shutdown()
+        finally:
+            if session_store:
+                session_store.close()
 
 
 def main() -> None:

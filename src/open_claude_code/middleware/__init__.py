@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from open_claude_code.agent import Agent
+    from open_claude_code.providers.base import ProviderResponse
 
 
 class Middleware(ABC):
@@ -54,6 +55,31 @@ class Middleware(ABC):
 
     async def on_turn_end(self, response: str) -> None:
         """Called after each turn completes with the agent's response."""
+
+    async def on_before_send(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+    ) -> tuple[list[dict], list[dict]]:
+        """Called immediately before sending a request to the provider."""
+        return messages, tools
+
+    async def on_after_response(self, response: "ProviderResponse") -> "ProviderResponse":
+        """Called immediately after receiving a provider response."""
+        return response
+
+    async def on_tool_result(
+        self,
+        tool_name: str,
+        result: Any,
+        tool_use_id: str = "",
+    ) -> Any:
+        """Called after a tool returns and before the result is appended."""
+        return result
+
+    async def on_before_tool(self, tool_name: str, tool_params: dict[str, Any]) -> tuple[bool, str]:
+        """Allow configuration middleware to veto a tool before approval/execution."""
+        return True, ""
 
     async def on_shutdown(self) -> None:
         """Called when the agent shuts down. Use for cleanup."""
@@ -126,6 +152,48 @@ class MiddlewareManager:
         """Run all middleware turn-end hooks."""
         for mw in self._middlewares:
             await mw.on_turn_end(response)
+
+    async def on_before_send(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+    ) -> tuple[list[dict], list[dict]]:
+        """Run provider request hooks in order."""
+        current_messages = messages
+        current_tools = tools
+        for mw in self._middlewares:
+            current_messages, current_tools = await mw.on_before_send(
+                current_messages,
+                current_tools,
+            )
+        return current_messages, current_tools
+
+    async def on_after_response(self, response: "ProviderResponse") -> "ProviderResponse":
+        """Run provider response hooks in order."""
+        current = response
+        for mw in self._middlewares:
+            current = await mw.on_after_response(current)
+        return current
+
+    async def on_tool_result(
+        self,
+        tool_name: str,
+        result: Any,
+        tool_use_id: str = "",
+    ) -> Any:
+        """Run tool-result hooks in order."""
+        current = result
+        for mw in self._middlewares:
+            current = await mw.on_tool_result(tool_name, current, tool_use_id)
+        return current
+
+    async def on_before_tool(self, tool_name: str, tool_params: dict[str, Any]) -> tuple[bool, str]:
+        """Return the first hook/middleware denial, if any."""
+        for mw in self._middlewares:
+            allowed, reason = await mw.on_before_tool(tool_name, tool_params)
+            if not allowed:
+                return False, reason
+        return True, ""
 
     async def shutdown(self) -> None:
         """Shut down all middleware (reverse order)."""

@@ -24,6 +24,20 @@ if TYPE_CHECKING:
 console = Console()
 
 
+PLAN_GENERATION_TOOLS = {
+    "read_file",
+    "list_directory",
+    "find_files",
+    "grep_search",
+    "web_search",
+    "read_url",
+    "read_plan",
+    "write_plan",
+    "update_plan",
+    "load_skill",
+}
+
+
 # ── Ask Mode ──────────────────────────────────────────────────────
 
 async def run_ask_mode(agent: Agent, user_input: str) -> None:
@@ -74,7 +88,13 @@ async def run_plan_mode(agent: Agent, user_input: str) -> None:
     """
     # Step 1: Generate the plan
     original_prompt = agent.system_prompt
+    original_tools = agent.tools
     agent.system_prompt = MODE_PROMPTS["plan"]
+    agent.tools = {
+        name: tool
+        for name, tool in original_tools.items()
+        if name in PLAN_GENERATION_TOOLS
+    }
 
     console.print()
     line = Text()
@@ -89,6 +109,7 @@ async def run_plan_mode(agent: Agent, user_input: str) -> None:
     except ProviderError as e:
         console.print(f"  Error: {e}", style="bold red")
         agent.system_prompt = original_prompt
+        agent.tools = original_tools
         return
 
     # Step 2: Ask for approval
@@ -108,6 +129,7 @@ async def run_plan_mode(agent: Agent, user_input: str) -> None:
         except (KeyboardInterrupt, EOFError):
             console.print("  Plan cancelled.", style="dim")
             agent.system_prompt = original_prompt
+            agent.tools = original_tools
             return
 
         if not response:
@@ -119,6 +141,7 @@ async def run_plan_mode(agent: Agent, user_input: str) -> None:
         if response.lower() in ("n", "no"):
             console.print("  Plan rejected.", style="dim red")
             agent.system_prompt = original_prompt
+            agent.tools = original_tools
             return
 
         # User typed feedback — refine the plan
@@ -142,6 +165,7 @@ async def run_plan_mode(agent: Agent, user_input: str) -> None:
 
     # Switch to agent mode for execution
     agent.system_prompt = PLAN_PHASE_PROMPT.format(plan=plan_text, task=user_input)
+    agent.tools = original_tools
 
     try:
         await agent.run(
@@ -151,6 +175,7 @@ async def run_plan_mode(agent: Agent, user_input: str) -> None:
         console.print(f"  Error during execution: {e}", style="bold red")
     finally:
         agent.system_prompt = original_prompt
+        agent.tools = original_tools
 
     console.print()
     console.print("  ✅ Plan execution complete.", style="bold green")

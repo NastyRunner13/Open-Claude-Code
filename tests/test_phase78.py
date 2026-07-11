@@ -258,4 +258,32 @@ class TestMCPManager:
     def test_call_tool_not_found(self):
         manager = MCPManager()
         result = asyncio.run(manager.call_tool("nonexistent", {}))
-        assert "not found" in result.lower()
+        assert result.success is False
+        assert "not found" in str(result).lower()
+
+    def test_get_occ_tools_registers_callable(self):
+        class FakeClient:
+            @property
+            def tools(self):
+                return [
+                    MCPTool(
+                        name="echo",
+                        description="Echo input",
+                        input_schema={"type": "object", "properties": {}},
+                        server_name="fake",
+                    )
+                ]
+
+            async def call_tool(self, name, arguments):
+                return f"{name}:{arguments['message']}"
+
+        manager = MCPManager()
+        manager._clients["fake"] = FakeClient()  # type: ignore[assignment]
+
+        tools = manager.get_occ_tools()
+        wrapper = tools["mcp_fake_echo"]["function"]
+        result = asyncio.run(wrapper(message="hello"))
+
+        assert callable(wrapper)
+        assert result.success is True
+        assert str(result) == "echo:hello"

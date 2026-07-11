@@ -26,6 +26,13 @@ async def load_skill(name: str, _skill_manager=None) -> ToolResult:
     if _skill_manager is None:
         return ToolResult.fail("Skill system not initialized.", skill_name=name)
 
+    metadata = _skill_manager.available.get(name)
+    if metadata and metadata.disable_model_invocation:
+        return ToolResult.fail(
+            f"Skill '{name}' may only be loaded with the interactive /skill load command.",
+            skill_name=name,
+        )
+
     skill = _skill_manager.load(name)
     if skill is None:
         available = list(_skill_manager.available.keys())

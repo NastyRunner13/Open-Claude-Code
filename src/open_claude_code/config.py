@@ -19,6 +19,11 @@ class AgentConfig:
     mode: str = "agent"  # ask | plan | agent
     skip_approval: bool = False
 
+    # Capability policy applied before approval prompts.  A denied capability
+    # cannot be enabled by --skip-approval or an auto-approve rule.
+    permission_mode: str = "workspace-write"  # read-only | workspace-write | full-access
+    disallowed_tools: list[str] = field(default_factory=list)
+
     # Provider settings
     api_key: str | None = None
     base_url: str | None = None
@@ -32,6 +37,13 @@ class AgentConfig:
         "web_search",
         "read_url",
     ])
+
+    # Filesystem safety. Paths are resolved relative to the process cwd.
+    workspace_roots: list[str] = field(default_factory=lambda: ["."])
+    writable_roots: list[str] = field(default_factory=lambda: ["."])
+
+    # Shell policy: read-only | workspace-write | full-access
+    shell_policy: str = "workspace-write"
 
     # Skill directories
     skills_dirs: list[str] = field(default_factory=lambda: [
@@ -51,6 +63,29 @@ class AgentConfig:
     # Context management
     max_context_tokens: int = 100000
     context_compaction: bool = True
+
+    # Durable local session ledger. The snapshot written beside each transcript
+    # deliberately redacts keys that look like credentials.
+    persist_sessions: bool = True
+    sessions_dir: str = ".occ/sessions"
+    snapshots_dir: str = ".occ/snapshots"
+    persist_snapshots: bool = True
+
+    # Web safety. The default permits public HTTP(S) only and blocks private
+    # network targets even when a model follows an untrusted link.
+    network_enabled: bool = True
+    web_allowed_domains: list[str] = field(default_factory=list)
+    web_blocked_domains: list[str] = field(default_factory=list)
+    web_cache_dir: str = ".occ/cache/web"
+    web_cache_ttl_seconds: int = 3600
+    web_max_response_bytes: int = 1_000_000
+
+    # Transient provider errors (429/5xx) are retried with exponential backoff.
+    provider_max_retries: int = 2
+    provider_retry_base_delay: float = 0.5
+    max_turns: int = 100
+    agents_dirs: list[str] = field(default_factory=lambda: [".occ/agents"])
+    hooks: dict[str, list[dict] | list[str]] = field(default_factory=dict)
 
     # Prompt caching (Anthropic only — reduces cost up to 90%)
     prompt_caching: bool = True
@@ -125,8 +160,18 @@ def _parse_config(path: Path) -> AgentConfig:
         config.mode = raw["mode"]
     if "skip_approval" in raw:
         config.skip_approval = raw["skip_approval"]
+    if "permission_mode" in raw:
+        config.permission_mode = raw["permission_mode"]
+    if "disallowed_tools" in raw:
+        config.disallowed_tools = raw["disallowed_tools"]
     if "auto_approve" in raw:
         config.auto_approve = raw["auto_approve"]
+    if "workspace_roots" in raw:
+        config.workspace_roots = raw["workspace_roots"]
+    if "writable_roots" in raw:
+        config.writable_roots = raw["writable_roots"]
+    if "shell_policy" in raw:
+        config.shell_policy = raw["shell_policy"]
     if "skills_dirs" in raw:
         config.skills_dirs = raw["skills_dirs"]
     if "plugins_dirs" in raw:
@@ -137,6 +182,36 @@ def _parse_config(path: Path) -> AgentConfig:
         config.max_context_tokens = raw["max_context_tokens"]
     if "context_compaction" in raw:
         config.context_compaction = raw["context_compaction"]
+    if "persist_sessions" in raw:
+        config.persist_sessions = raw["persist_sessions"]
+    if "sessions_dir" in raw:
+        config.sessions_dir = raw["sessions_dir"]
+    if "snapshots_dir" in raw:
+        config.snapshots_dir = raw["snapshots_dir"]
+    if "persist_snapshots" in raw:
+        config.persist_snapshots = raw["persist_snapshots"]
+    if "network_enabled" in raw:
+        config.network_enabled = raw["network_enabled"]
+    if "web_allowed_domains" in raw:
+        config.web_allowed_domains = raw["web_allowed_domains"]
+    if "web_blocked_domains" in raw:
+        config.web_blocked_domains = raw["web_blocked_domains"]
+    if "web_cache_dir" in raw:
+        config.web_cache_dir = raw["web_cache_dir"]
+    if "web_cache_ttl_seconds" in raw:
+        config.web_cache_ttl_seconds = raw["web_cache_ttl_seconds"]
+    if "web_max_response_bytes" in raw:
+        config.web_max_response_bytes = raw["web_max_response_bytes"]
+    if "provider_max_retries" in raw:
+        config.provider_max_retries = raw["provider_max_retries"]
+    if "provider_retry_base_delay" in raw:
+        config.provider_retry_base_delay = raw["provider_retry_base_delay"]
+    if "max_turns" in raw:
+        config.max_turns = raw["max_turns"]
+    if "agents_dirs" in raw:
+        config.agents_dirs = raw["agents_dirs"]
+    if "hooks" in raw and isinstance(raw["hooks"], dict):
+        config.hooks = raw["hooks"]
     if "prompt_caching" in raw:
         config.prompt_caching = raw["prompt_caching"]
     if "memory_dirs" in raw:

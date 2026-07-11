@@ -10,7 +10,9 @@ from anthropic import AsyncAnthropic
 from .base import (
     Provider,
     ProviderError,
+    ProviderMetadata,
     ProviderResponse,
+    ProviderUsage,
     TextBlock,
     ThinkingBlock,
     ToolUseBlock,
@@ -166,7 +168,7 @@ class AnthropicProvider(Provider):
             response = await self.client.messages.create(**kwargs)
 
         except Exception as e:
-            raise ProviderError(str(e)) from e
+            raise ProviderError.from_exception(e) from e
 
         thinking: ThinkingBlock | None = None
         content: list[TextBlock | ToolUseBlock] = []
@@ -184,4 +186,19 @@ class AnthropicProvider(Provider):
                     ToolUseBlock(id=block.id, name=block.name, input=block.input)
                 )
 
-        return ProviderResponse(thinking=thinking, content=content)
+        usage = getattr(response, "usage", None)
+        return ProviderResponse(
+            thinking=thinking,
+            content=content,
+            usage=ProviderUsage(
+                input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+                output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+                cache_read_tokens=int(getattr(usage, "cache_read_input_tokens", 0) or 0),
+                cache_creation_tokens=int(getattr(usage, "cache_creation_input_tokens", 0) or 0),
+            ),
+            metadata=ProviderMetadata(
+                request_id=str(getattr(response, "_request_id", "") or ""),
+                finish_reason=str(getattr(response, "stop_reason", "") or ""),
+                model=self.model,
+            ),
+        )

@@ -15,6 +15,7 @@ from open_claude_code.events import (
     SubagentStart,
     SubagentStop,
     Thinking,
+    ToolDenied,
 )
 
 _DEFAULT_LOG_PATH = Path("occ.log")
@@ -77,6 +78,15 @@ def register_logging_listeners(
         preview = event.result.strip().replace("\n", " ")[:200]
         logger.info("[PostToolUse] tool=%s result=%s", event.tool_name, preview)
 
+    async def on_tool_denied(event: ToolDenied) -> None:
+        logger.warning(
+            "[ToolDenied] tool=%s operation=%s path=%s reason=%s",
+            event.tool_name,
+            event.operation,
+            event.path,
+            event.reason,
+        )
+
     async def on_stop(event: Stop) -> None:
         preview = event.text.strip().replace("\n", " ")[:200]
         logger.info("[Stop] response=%s", preview)
@@ -91,6 +101,7 @@ def register_logging_listeners(
     event_bus.on(Thinking, on_thinking)
     event_bus.on(PreToolUse, on_pre_tool_use)
     event_bus.on(PostToolUse, on_post_tool_use)
+    event_bus.on(ToolDenied, on_tool_denied)
     event_bus.on(Stop, on_stop)
     event_bus.on(SubagentStart, on_subagent_start)
     event_bus.on(SubagentStop, on_subagent_stop)

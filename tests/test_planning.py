@@ -4,9 +4,13 @@ import asyncio
 
 import pytest
 
+from open_claude_code.agent import Agent
+from open_claude_code.events import EventBus
+from open_claude_code.modes import run_plan_mode
 from open_claude_code.planning.store import PlanItem, PlanStore
 from open_claude_code.planning.tools import make_plan_tools
 from open_claude_code.planning.middleware import PlanningMiddleware
+from open_claude_code.providers.base import Provider, ProviderResponse, TextBlock, ToolUseBlock
 
 
 # ── PlanStore tests ────────────────────────────────────────────────
@@ -333,3 +337,55 @@ class TestPlanningMiddleware:
         mw = PlanningMiddleware()
         result = mw.handle_slash_command("/mode", "agent")
         assert result is None
+
+
+class MockProvider(Provider):
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.tool_names_seen = []
+
+    @property
+    def model_name(self) -> str:
+        return "mock"
+
+    async def send(self, messages, tools, system_prompt):
+        self.tool_names_seen.append([tool["name"] for tool in tools])
+        return self.responses.pop(0)
+
+
+@pytest.mark.asyncio
+async def test_plan_generation_filters_mutating_tools(monkeypatch):
+    """Plan generation exposes only read/exploration and plan tools."""
+    called = False
+
+    async def write_file(**kwargs):
+        nonlocal called
+        called = True
+        return "wrote"
+
+    provider = MockProvider([
+        ProviderResponse(
+            thinking=None,
+            content=[ToolUseBlock(id="t1", name="write_file", input={"file_path": "x", "content": "y"})],
+        ),
+        ProviderResponse(thinking=None, content=[TextBlock(text="Plan text")]),
+    ])
+    tools = {
+        "read_file": {
+            "function": lambda **kwargs: "read",
+            "schema": {"name": "read_file", "description": "", "input_schema": {}},
+        },
+        "write_file": {
+            "function": write_file,
+            "schema": {"name": "write_file", "description": "", "input_schema": {}},
+        },
+    }
+    agent = Agent(provider=provider, event_bus=EventBus(), tools=tools)
+    monkeypatch.setattr("open_claude_code.modes.console.input", lambda *_args, **_kwargs: "n")
+
+    await run_plan_mode(agent, "make a plan")
+
+    assert "read_file" in provider.tool_names_seen[0]
+    assert "write_file" not in provider.tool_names_seen[0]
+    assert called is False
+    assert agent.tools is tools

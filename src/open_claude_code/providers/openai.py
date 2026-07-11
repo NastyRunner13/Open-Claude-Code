@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import uuid
-
 from openai import AsyncOpenAI
 
 from .base import (
     Provider,
     ProviderError,
+    ProviderMetadata,
     ProviderResponse,
+    ProviderUsage,
     TextBlock,
     ThinkingBlock,
     ToolUseBlock,
@@ -149,7 +149,7 @@ class OpenAIProvider(Provider):
             response = await self.client.chat.completions.create(**kwargs)
 
         except Exception as e:
-            raise ProviderError(str(e)) from e
+            raise ProviderError.from_exception(e) from e
 
         choice = response.choices[0]
         message = choice.message
@@ -182,4 +182,20 @@ class OpenAIProvider(Provider):
                     input=args,
                 ))
 
-        return ProviderResponse(thinking=thinking, content=content)
+        usage = getattr(response, "usage", None)
+        return ProviderResponse(
+            thinking=thinking,
+            content=content,
+            usage=ProviderUsage(
+                input_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
+                output_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
+                cache_read_tokens=int(
+                    getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", 0) or 0
+                ),
+            ),
+            metadata=ProviderMetadata(
+                request_id=str(getattr(response, "id", "") or ""),
+                finish_reason=str(getattr(choice, "finish_reason", "") or ""),
+                model=str(getattr(response, "model", self.model) or self.model),
+            ),
+        )

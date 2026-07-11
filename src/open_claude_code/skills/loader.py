@@ -30,6 +30,9 @@ class Skill:
     # Additional file paths relative to the skill directory
     scripts: list[Path] = field(default_factory=list)
     examples: list[Path] = field(default_factory=list)
+    assets: list[Path] = field(default_factory=list)
+    disable_model_invocation: bool = False
+    allowed_tools: list[str] = field(default_factory=list)
 
     @property
     def prompt_injection(self) -> str:
@@ -42,7 +45,7 @@ class Skill:
         )
 
 
-def parse_skill_md(path: Path) -> Skill:
+def parse_skill_md(path: Path, include_instructions: bool = True) -> Skill:
     """Parse a SKILL.md file into a Skill object.
 
     Expected format:
@@ -57,27 +60,33 @@ def parse_skill_md(path: Path) -> Skill:
     # Parse YAML frontmatter
     name = "unnamed"
     description = ""
-    instructions = content
+    instructions = content if include_instructions else ""
+    metadata: dict = {}
 
     if content.startswith("---"):
         parts = content.split("---", 2)
         if len(parts) >= 3:
             frontmatter = parts[1].strip()
-            instructions = parts[2].strip()
+            instructions = parts[2].strip() if include_instructions else ""
 
-            # Simple YAML parsing (avoid full YAML dependency for just two fields)
-            for line in frontmatter.split("\n"):
-                line = line.strip()
-                if line.startswith("name:"):
-                    name = line[5:].strip().strip("\"'")
-                elif line.startswith("description:"):
-                    description = line[12:].strip().strip("\"'")
+            try:
+                import yaml
+                parsed = yaml.safe_load(frontmatter)
+                metadata = parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                metadata = {}
+            name = str(metadata.get("name", name))
+            description = str(metadata.get("description", description))
 
     skill_dir = path.parent
 
     # Discover additional resources
     scripts = list((skill_dir / "scripts").glob("*")) if (skill_dir / "scripts").exists() else []
     examples = list((skill_dir / "examples").glob("*")) if (skill_dir / "examples").exists() else []
+    assets = list((skill_dir / "assets").glob("*")) if (skill_dir / "assets").exists() else []
+    allowed_tools = metadata.get("allowed_tools", [])
+    if isinstance(allowed_tools, str):
+        allowed_tools = [allowed_tools]
 
     return Skill(
         name=name,
@@ -86,6 +95,9 @@ def parse_skill_md(path: Path) -> Skill:
         path=skill_dir,
         scripts=scripts,
         examples=examples,
+        assets=assets,
+        disable_model_invocation=bool(metadata.get("disable_model_invocation", False)),
+        allowed_tools=[str(item) for item in allowed_tools] if isinstance(allowed_tools, list) else [],
     )
 
 
@@ -111,7 +123,9 @@ class SkillManager:
                     skill_md = skill_dir / "SKILL.md"
                     if skill_md.exists():
                         try:
-                            skill = parse_skill_md(skill_md)
+                            # Keep discovery cheap: detailed instructions only
+                            # enter prompt context after an explicit load.
+                            skill = parse_skill_md(skill_md, include_instructions=False)
                             self._available[skill.name] = skill
                         except Exception:
                             pass  # Skip malformed skills
@@ -138,7 +152,7 @@ class SkillManager:
 
         # Check available skills
         if name in self._available:
-            self._loaded[name] = self._available[name]
+            self._loaded[name] = parse_skill_md(self._available[name].path / "SKILL.md")
             return self._loaded[name]
 
         # Try loading from a direct path
@@ -165,6 +179,16 @@ class SkillManager:
         for skill in self._loaded.values():
             parts.append(skill.prompt_injection)
         return "\n".join(parts)
+
+    def get_catalog_prompt(self) -> str:
+        """Expose a compact, model-invocable skill catalog without full bodies."""
+        choices = [skill for skill in self._available.values() if not skill.disable_model_invocation]
+        if not choices:
+            return ""
+        lines = ["# Available Skills", "Load a skill with `load_skill` only when it is relevant:"]
+        for skill in choices:
+            lines.append(f"- {skill.name}: {skill.description or 'No description provided.'}")
+        return "\n".join(lines)
 
     def list_formatted(self) -> str:
         """Return a formatted listing of available and loaded skills."""

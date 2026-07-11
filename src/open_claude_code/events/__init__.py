@@ -11,6 +11,11 @@ from .types import (
     SubagentStart,
     SubagentStop,
     Thinking,
+    ToolDenied,
+    TokenDelta,
+    ToolCallDelta,
+    UsageUpdated,
+    ProviderFailure,
 )
 
 __all__ = [
@@ -24,4 +29,9 @@ __all__ = [
     "SubagentStart",
     "SubagentStop",
     "Thinking",
+    "ToolDenied",
+    "TokenDelta",
+    "ToolCallDelta",
+    "UsageUpdated",
+    "ProviderFailure",
 ]

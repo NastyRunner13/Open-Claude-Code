@@ -5,6 +5,9 @@ import os
 
 import pytest
 
+from open_claude_code.config import AgentConfig
+from open_claude_code.events import EventBus, ToolDenied
+from open_claude_code.tools import get_tools
 from open_claude_code.tools.edit_file import edit_file
 from open_claude_code.tools.find_files import find_files
 from open_claude_code.tools.list_directory import list_directory
@@ -133,3 +136,94 @@ class TestSandbox:
         result = asyncio.run(sandbox("code", language="rust"))
         assert result.success is False
         assert "unsupported language" in str(result)
+
+
+class TestRuntimeToolPolicy:
+    def test_max_tool_output_uses_config(self, tmp_path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        f = workspace / "big.txt"
+        f.write_text("x" * 200, encoding="utf-8")
+
+        config = AgentConfig(
+            max_tool_output=20,
+            workspace_roots=[str(workspace)],
+            writable_roots=[str(workspace)],
+        )
+        tools = get_tools(config=config)
+        result = asyncio.run(tools["read_file"]["function"](file_path=str(f)))
+
+        assert result.success is True
+        assert str(result).endswith("[truncated]")
+        assert len(str(result)) <= 40
+
+    def test_read_outside_workspace_is_denied_and_emits_event(self, tmp_path):
+        workspace = tmp_path / "workspace"
+        outside = tmp_path / "outside.txt"
+        workspace.mkdir()
+        outside.write_text("secret", encoding="utf-8")
+
+        events = []
+
+        async def collect(event):
+            events.append(event)
+
+        bus = EventBus()
+        bus.on(ToolDenied, collect)
+        config = AgentConfig(
+            workspace_roots=[str(workspace)],
+            writable_roots=[str(workspace)],
+        )
+        tools = get_tools(config=config, event_bus=bus)
+
+        result = asyncio.run(tools["read_file"]["function"](file_path=str(outside)))
+
+        assert result.success is False
+        assert "outside workspace roots" in str(result)
+        assert len(events) == 1
+        assert events[0].tool_name == "read_file"
+
+    def test_write_outside_writable_root_is_denied(self, tmp_path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        outside = tmp_path / "outside.txt"
+        config = AgentConfig(
+            workspace_roots=[str(workspace)],
+            writable_roots=[str(workspace)],
+        )
+        tools = get_tools(config=config)
+
+        result = asyncio.run(
+            tools["write_file"]["function"](file_path=str(outside), content="nope")
+        )
+
+        assert result.success is False
+        assert not outside.exists()
+
+    def test_read_only_shell_policy_denies_write_commands(self, tmp_path):
+        config = AgentConfig(
+            workspace_roots=[str(tmp_path)],
+            writable_roots=[str(tmp_path)],
+            shell_policy="read-only",
+        )
+        tools = get_tools(config=config)
+
+        result = asyncio.run(tools["run_shell"]["function"](command="mkdir blocked"))
+
+        assert result.success is False
+        assert "read-only" in str(result)
+
+    def test_workspace_shell_policy_denies_destructive_commands(self, tmp_path):
+        config = AgentConfig(
+            workspace_roots=[str(tmp_path)],
+            writable_roots=[str(tmp_path)],
+            shell_policy="workspace-write",
+        )
+        tools = get_tools(config=config)
+
+        result = asyncio.run(
+            tools["run_shell"]["function"](command="git reset --hard")
+        )
+
+        assert result.success is False
+        assert result.metadata["classification"] == "destructive"

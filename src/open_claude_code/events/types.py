@@ -18,6 +18,51 @@ class PreToolUse:
 
 
 @dataclass
+class ToolDenied:
+    """Emitted when runtime policy denies a tool before it can execute."""
+    tool_name: str
+    reason: str
+    operation: str = ""
+    path: str = ""
+
+
+@dataclass
+class TokenDelta:
+    """A streamed content/reasoning fragment from the active provider."""
+    text: str
+    channel: str = "content"  # content | thinking
+
+
+@dataclass
+class ToolCallDelta:
+    """A completed or partial streamed provider tool call."""
+    tool_name: str
+    tool_use_id: str = ""
+    complete: bool = False
+
+
+@dataclass
+class UsageUpdated:
+    """Normalized token usage and provider request metadata."""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
+    request_id: str = ""
+    finish_reason: str = ""
+    latency_ms: float = 0.0
+    model: str = ""
+
+
+@dataclass
+class ProviderFailure:
+    """A structured provider failure suitable for logs and JSONL automation."""
+    message: str
+    transient: bool = False
+    status_code: int | None = None
+
+
+@dataclass
 class PostToolUse:
     """Emitted after a tool has executed with its result."""
     tool_name: str

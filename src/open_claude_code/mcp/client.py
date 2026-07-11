@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from open_claude_code.tools.result import ToolResult
+
 
 @dataclass
 class MCPServerConfig:
@@ -242,13 +244,34 @@ class MCPManager:
             tools.extend(client.tools)
         return tools
 
-    async def call_tool(self, tool_name: str, arguments: dict) -> str:
+    async def call_tool(
+        self,
+        tool_name: str,
+        arguments: dict,
+        server_name: str | None = None,
+    ) -> ToolResult:
         """Call a tool by name, routing to the correct server."""
-        for client in self._clients.values():
+        for name, client in self._clients.items():
+            if server_name is not None and name != server_name:
+                continue
             for tool in client.tools:
                 if tool.name == tool_name:
-                    return await client.call_tool(tool_name, arguments)
-        return f"Error: Tool '{tool_name}' not found on any MCP server"
+                    result = await client.call_tool(tool_name, arguments)
+                    return ToolResult.ok(
+                        result,
+                        tool_name=tool_name,
+                        server_name=name,
+                    )
+        if server_name:
+            return ToolResult.fail(
+                f"Tool '{tool_name}' not found on MCP server '{server_name}'",
+                tool_name=tool_name,
+                server_name=server_name,
+            )
+        return ToolResult.fail(
+            f"Tool '{tool_name}' not found on any MCP server",
+            tool_name=tool_name,
+        )
 
     def get_occ_tools(self) -> dict:
         """Convert all MCP tools into OCC's native tool format."""
@@ -257,14 +280,17 @@ class MCPManager:
             # Prefix with mcp_ to avoid collisions with built-in tools
             occ_name = f"mcp_{tool.server_name}_{tool.name}"
 
-            # Create a closure to capture the tool name
-            async def make_caller(tn: str):
-                async def caller(**kwargs: Any) -> str:
-                    return await self.call_tool(tn, kwargs)
+            def make_caller(server_name: str, tool_name: str):
+                async def caller(**kwargs: Any) -> ToolResult:
+                    return await self.call_tool(
+                        tool_name,
+                        kwargs,
+                        server_name=server_name,
+                    )
                 return caller
 
             occ_tools[occ_name] = {
-                "function": None,  # Will be set below
+                "function": make_caller(tool.server_name, tool.name),
                 "schema": {
                     "name": occ_name,
                     "description": f"[MCP:{tool.server_name}] {tool.description}",

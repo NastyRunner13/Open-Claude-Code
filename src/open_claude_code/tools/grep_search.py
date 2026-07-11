@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 
+from open_claude_code.tools.context import ToolContext
 from open_claude_code.tools.result import ToolResult
 
 MAX_OUTPUT = 10000
@@ -39,17 +40,38 @@ SCHEMA = {
 }
 
 
-async def grep_search(pattern: str, path: str = ".", include: str = "") -> ToolResult:
+async def grep_search(
+    pattern: str,
+    path: str = ".",
+    include: str = "",
+    _context: ToolContext | None = None,
+) -> ToolResult:
     """Search for pattern in files."""
+    target_path = path
+    max_output = _context.max_output if _context else MAX_OUTPUT
+    if _context:
+        decision = _context.check_read_path(path)
+        if not decision.allowed:
+            await _context.emit_denied(
+                "grep_search", decision.reason, operation="read", path=decision.resolved_path
+            )
+            return ToolResult.fail(decision.reason, pattern=pattern, path=str(decision.resolved_path))
+        target_path = str(decision.resolved_path)
+
     # Try ripgrep first (much faster)
     rg_path = shutil.which("rg")
     if rg_path:
-        return await _ripgrep_search(pattern, path, include)
+        return await _ripgrep_search(pattern, target_path, include, max_output)
     else:
-        return await _python_grep(pattern, path, include)
+        return await _python_grep(pattern, target_path, include, max_output)
 
 
-async def _ripgrep_search(pattern: str, path: str, include: str) -> ToolResult:
+async def _ripgrep_search(
+    pattern: str,
+    path: str,
+    include: str,
+    max_output: int = MAX_OUTPUT,
+) -> ToolResult:
     """Search using ripgrep."""
     cmd = ["rg", "--no-heading", "--line-number", "--color=never", "-S"]
     if include:
@@ -76,15 +98,20 @@ async def _ripgrep_search(pattern: str, path: str, include: str) -> ToolResult:
             match_count=0,
         )
 
-    truncated = len(output) > MAX_OUTPUT
+    truncated = len(output) > max_output
     if truncated:
-        output = output[:MAX_OUTPUT] + "\n[truncated]"
+        output = output[:max_output] + "\n[truncated]"
 
     match_count = output.count("\n")
     return ToolResult.ok(output, pattern=pattern, match_count=match_count, truncated=truncated)
 
 
-async def _python_grep(pattern: str, path: str, include: str) -> ToolResult:
+async def _python_grep(
+    pattern: str,
+    path: str,
+    include: str,
+    max_output: int = MAX_OUTPUT,
+) -> ToolResult:
     """Fallback grep using Python."""
     try:
         regex = re.compile(pattern, re.IGNORECASE)
@@ -116,9 +143,9 @@ async def _python_grep(pattern: str, path: str, include: str) -> ToolResult:
         )
 
     output = "\n".join(results)
-    truncated = len(output) > MAX_OUTPUT
+    truncated = len(output) > max_output
     if truncated:
-        output = output[:MAX_OUTPUT] + "\n[truncated]"
+        output = output[:max_output] + "\n[truncated]"
 
     return ToolResult.ok(output, pattern=pattern, match_count=len(results), truncated=truncated)
 

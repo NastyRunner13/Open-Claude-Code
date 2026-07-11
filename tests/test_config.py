@@ -51,12 +51,36 @@ class TestLoadConfig:
 class TestParseConfig:
     def test_full_config(self, tmp_path):
         path = tmp_path / "occ.yml"
-        path.write_text("model: gpt-4o\nmax_tokens: 32000\nskip_approval: true\nmode: plan\n")
+        path.write_text(
+            "model: gpt-4o\n"
+            "max_tokens: 32000\n"
+            "max_tool_output: 1234\n"
+            "skip_approval: true\n"
+            "mode: plan\n"
+            "permission_mode: read-only\n"
+            "disallowed_tools:\n"
+            "  - mcp_production_*\n"
+            "workspace_roots:\n"
+            "  - src\n"
+            "writable_roots:\n"
+            "  - src\n"
+            "shell_policy: read-only\n"
+            "persist_sessions: false\n"
+            "sessions_dir: custom-sessions\n"
+        )
         config = _parse_config(path)
         assert config.model == "gpt-4o"
         assert config.max_tokens == 32000
+        assert config.max_tool_output == 1234
         assert config.skip_approval is True
         assert config.mode == "plan"
+        assert config.permission_mode == "read-only"
+        assert config.disallowed_tools == ["mcp_production_*"]
+        assert config.workspace_roots == ["src"]
+        assert config.writable_roots == ["src"]
+        assert config.shell_policy == "read-only"
+        assert config.persist_sessions is False
+        assert config.sessions_dir == "custom-sessions"
 
     def test_empty_config(self, tmp_path):
         path = tmp_path / "occ.yml"

@@ -3,7 +3,10 @@
 import glob
 import os
 
+from open_claude_code.tools.context import ToolContext
 from open_claude_code.tools.result import ToolResult
+
+MAX_OUTPUT = 10000
 
 SCHEMA = {
     "name": "find_files",
@@ -30,12 +33,33 @@ SCHEMA = {
 }
 
 
-async def find_files(pattern: str, path: str = ".") -> ToolResult:
+async def find_files(
+    pattern: str,
+    path: str = ".",
+    _context: ToolContext | None = None,
+) -> ToolResult:
     """Find files matching a glob pattern."""
+    target_path = path
+    max_output = _context.max_output if _context else MAX_OUTPUT
+    if _context:
+        decision = _context.check_read_path(path)
+        if not decision.allowed:
+            await _context.emit_denied(
+                "find_files", decision.reason, operation="read", path=decision.resolved_path
+            )
+            return ToolResult.fail(decision.reason, pattern=pattern, path=str(decision.resolved_path))
+        target_path = str(decision.resolved_path)
+
     try:
-        matches = glob.glob(os.path.join(path, pattern), recursive=True)
+        matches = glob.glob(os.path.join(target_path, pattern), recursive=True)
     except (PermissionError, OSError) as e:
-        return ToolResult.fail(str(e), pattern=pattern, path=path)
+        return ToolResult.fail(str(e), pattern=pattern, path=target_path)
+
+    if _context:
+        matches = [
+            match for match in matches
+            if _context.check_read_path(match).allowed
+        ]
 
     if not matches:
         return ToolResult.ok(
@@ -53,4 +77,14 @@ async def find_files(pattern: str, path: str = ".") -> ToolResult:
     else:
         output = "\n".join(matches)
 
-    return ToolResult.ok(output, pattern=pattern, match_count=total, truncated=truncated)
+    output_truncated = len(output) > max_output
+    if output_truncated:
+        output = output[:max_output] + "\n[truncated]"
+
+    return ToolResult.ok(
+        output,
+        pattern=pattern,
+        path=target_path,
+        match_count=total,
+        truncated=truncated or output_truncated,
+    )

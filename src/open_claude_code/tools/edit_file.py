@@ -1,5 +1,7 @@
 """Edit file tool — exact string replacement for surgical edits."""
 
+from open_claude_code.tools.context import ToolContext
+from open_claude_code.tools.changes import result_with_diff, unified_diff
 from open_claude_code.tools.result import ToolResult
 
 SCHEMA = {
@@ -34,34 +36,57 @@ SCHEMA = {
 }
 
 
-async def edit_file(file_path: str, old_string: str, new_string: str) -> ToolResult:
+async def edit_file(
+    file_path: str,
+    old_string: str,
+    new_string: str,
+    _context: ToolContext | None = None,
+) -> ToolResult:
     """Replace old_string with new_string. old_string must be unique in the file."""
+    target_path = file_path
+    if _context:
+        decision = _context.check_write_path(file_path)
+        if not decision.allowed:
+            await _context.emit_denied(
+                "edit_file", decision.reason, operation="write", path=decision.resolved_path
+            )
+            return ToolResult.fail(decision.reason, file_path=str(decision.resolved_path))
+        target_path = str(decision.resolved_path)
+
     try:
-        with open(file_path, encoding="utf-8") as f:
+        with open(target_path, encoding="utf-8") as f:
             content = f.read()
     except (FileNotFoundError, PermissionError) as e:
-        return ToolResult.fail(str(e), file_path=file_path)
+        return ToolResult.fail(str(e), file_path=target_path)
 
     if not old_string:
-        return ToolResult.fail("old_string cannot be empty", file_path=file_path)
+        return ToolResult.fail("old_string cannot be empty", file_path=target_path)
 
     first = content.find(old_string)
     if first == -1:
-        return ToolResult.fail("old_string not found in file", file_path=file_path)
+        return ToolResult.fail("old_string not found in file", file_path=target_path)
     if content.find(old_string, first + 1) != -1:
         return ToolResult.fail(
             "old_string is not unique — provide more surrounding context",
-            file_path=file_path,
+            file_path=target_path,
         )
 
     new_content = content[:first] + new_string + content[first + len(old_string):]
 
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(new_content)
+    try:
+        snapshot = _context.snapshots.create(target_path) if _context and _context.snapshots else None
+        with open(target_path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+    except (PermissionError, OSError) as e:
+        return ToolResult.fail(str(e), file_path=target_path)
 
+    diff = unified_diff(content, new_content, target_path, _context.max_output if _context else 10000)
+    message = f"Successfully edited {target_path}"
     return ToolResult.ok(
-        f"Successfully edited {file_path}",
-        file_path=file_path,
+        result_with_diff(message, diff),
+        file_path=target_path,
         chars_removed=len(old_string),
         chars_added=len(new_string),
+        diff=diff,
+        snapshot_id=snapshot.snapshot_id if snapshot else None,
     )
