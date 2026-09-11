@@ -87,3 +87,19 @@ class TestParseConfig:
         path.write_text("")
         config = _parse_config(path)
         assert config.model == "claude-sonnet-4-20250514"
+
+    def test_parses_base_url(self, tmp_path):
+        path = tmp_path / "occ.yml"
+        path.write_text(
+            "model: anthropic/claude-sonnet-4\n"
+            "base_url: https://openrouter.ai/api/v1\n"
+        )
+        config = _parse_config(path)
+        assert config.model == "anthropic/claude-sonnet-4"
+        assert config.base_url == "https://openrouter.ai/api/v1"
+
+    def test_does_not_require_base_url(self, tmp_path):
+        path = tmp_path / "occ.yml"
+        path.write_text("model: gpt-4o\n")
+        config = _parse_config(path)
+        assert config.base_url is None

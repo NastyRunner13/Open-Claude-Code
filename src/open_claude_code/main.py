@@ -87,7 +87,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--base-url",
         default=None,
-        help="Custom API base URL (for OpenAI-compatible endpoints like OpenRouter)",
+        help="Custom API base URL (OpenAI-compatible endpoints: vLLM, Together, etc.)",
     )
     parser.add_argument(
         "--resume",

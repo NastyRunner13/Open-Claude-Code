@@ -70,6 +70,61 @@ class TestRegistryAutoDetection:
         from open_claude_code.providers.groq import GroqProvider
         assert isinstance(p, GroqProvider)
 
+    def test_openrouter_prefix(self):
+        p = create_provider("openrouter/anthropic/claude-sonnet-4", api_key="test-key")
+        from open_claude_code.providers.openrouter import OpenRouterProvider
+        assert isinstance(p, OpenRouterProvider)
+        assert p.model == "anthropic/claude-sonnet-4"
+
+    def test_openrouter_native_id(self):
+        p = create_provider("openrouter/auto", api_key="test-key")
+        from open_claude_code.providers.openrouter import OpenRouterProvider
+        assert isinstance(p, OpenRouterProvider)
+        assert p.model == "auto"
+
+    def test_openrouter_vendor_model_with_key(self, monkeypatch):
+        monkeypatch.setenv("OPENROUTER_API_KEY", "or-key")
+        monkeypatch.delenv("GROQ_API_KEY", raising=False)
+        p = create_provider("anthropic/claude-sonnet-4")
+        from open_claude_code.providers.openrouter import OpenRouterProvider
+        assert isinstance(p, OpenRouterProvider)
+        assert p.model == "anthropic/claude-sonnet-4"
+
+    def test_openrouter_heuristic_skips_groq_prefix(self, monkeypatch):
+        monkeypatch.setenv("OPENROUTER_API_KEY", "or-key")
+        p = create_provider("groq/llama-3.3-70b-versatile", api_key="test-key")
+        from open_claude_code.providers.groq import GroqProvider
+        assert isinstance(p, GroqProvider)
+
+    def test_openrouter_heuristic_skips_ollama_prefix(self, monkeypatch):
+        monkeypatch.setenv("OPENROUTER_API_KEY", "or-key")
+        p = create_provider("ollama/llama3.2")
+        from open_claude_code.providers.ollama import OllamaProvider
+        assert isinstance(p, OllamaProvider)
+
+    def test_openrouter_heuristic_off_without_key(self, monkeypatch):
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        p = create_provider("anthropic/claude-sonnet-4")
+        from open_claude_code.providers.anthropic import AnthropicProvider
+        assert isinstance(p, AnthropicProvider)
+
+    def test_base_url_wins_over_openrouter_heuristic(self, monkeypatch):
+        monkeypatch.setenv("OPENROUTER_API_KEY", "or-key")
+        p = create_provider(
+            "org/custom-model",
+            api_key="test-key",
+            base_url="https://my-vllm.example/v1",
+        )
+        from open_claude_code.providers.openai import OpenAIProvider
+        assert isinstance(p, OpenAIProvider)
+
+    def test_openrouter_missing_key(self, monkeypatch):
+        from open_claude_code.providers.base import ProviderError
+
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        with pytest.raises(ProviderError, match="OPENROUTER_API_KEY"):
+            create_provider("openrouter/anthropic/claude-sonnet-4")
+
 
 class TestProviderModelName:
     """Test model_name property for each provider."""
@@ -89,6 +144,26 @@ class TestProviderModelName:
     def test_ollama_model_name(self):
         p = create_provider("ollama/llama3.2")
         assert p.model_name == "ollama/llama3.2"
+
+    def test_openrouter_model_name_strips_prefix(self):
+        p = create_provider("openrouter/openai/gpt-4o", api_key="test")
+        assert p.model_name == "openrouter/openai/gpt-4o"
+
+
+class TestOpenRouterDefaults:
+    def test_header_defaults_and_base_url(self):
+        from open_claude_code.providers.openrouter import (
+            DEFAULT_BASE_URL,
+            DEFAULT_HEADERS,
+            OpenRouterProvider,
+        )
+
+        p = OpenRouterProvider(model="openrouter/openai/gpt-4o", api_key="test")
+        headers = p._inner.client.default_headers
+        assert headers["HTTP-Referer"] == DEFAULT_HEADERS["HTTP-Referer"]
+        assert headers["X-Title"] == DEFAULT_HEADERS["X-Title"]
+        assert str(p._inner.client.base_url).rstrip("/") == DEFAULT_BASE_URL.rstrip("/")
+        assert p.default_headers == DEFAULT_HEADERS
 
 
 class TestOpenAIMessageConversion:

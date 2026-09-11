@@ -6,7 +6,9 @@ Resolves model strings to the correct provider:
   gemini-*     → GeminiProvider
   groq/*       → GroqProvider
   ollama/*     → OllamaProvider
-  http(s)://   → OpenAIProvider (custom endpoint)
+  openrouter/* → OpenRouterProvider
+  vendor/model + OPENROUTER_API_KEY → OpenRouterProvider
+  base_url     → OpenAIProvider (custom endpoint)
 """
 
 from __future__ import annotations
@@ -26,8 +28,9 @@ def create_provider(
     """Create the appropriate provider based on model name.
 
     Auto-detects the provider from the model string.
-    Supports explicit provider prefixes like 'groq/' and 'ollama/'.
+    Supports explicit prefixes: groq/, ollama/, openrouter/.
     Falls back to OpenAI-compatible if a base_url is given.
+    Vendor/model slugs route to OpenRouter when OPENROUTER_API_KEY is set.
     Falls back to Anthropic otherwise.
     """
     model_lower = model.lower()
@@ -40,6 +43,10 @@ def create_provider(
     if model_lower.startswith("ollama/"):
         from .ollama import OllamaProvider
         return OllamaProvider(model=model, max_tokens=max_tokens, base_url=base_url)
+
+    if model_lower.startswith("openrouter/"):
+        from .openrouter import OpenRouterProvider
+        return OpenRouterProvider(model=model, max_tokens=max_tokens, api_key=api_key)
 
     # Custom endpoint → OpenAI-compatible
     if base_url:
@@ -71,6 +78,11 @@ def create_provider(
         if os.environ.get("GROQ_API_KEY"):
             from .groq import GroqProvider
             return GroqProvider(model=model, max_tokens=max_tokens, api_key=api_key)
+
+    # vendor/model slugs (Together, Fireworks, xAI, OpenRouter catalog ids)
+    if "/" in model_lower and os.environ.get("OPENROUTER_API_KEY"):
+        from .openrouter import OpenRouterProvider
+        return OpenRouterProvider(model=model, max_tokens=max_tokens, api_key=api_key)
 
     # Default → Anthropic
     from .anthropic import AnthropicProvider

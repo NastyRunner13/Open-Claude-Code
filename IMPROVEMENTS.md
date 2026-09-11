@@ -44,7 +44,7 @@ safety claims are only true for the happy path.
 | Shell | Partial | `workspace-write` denies unknown and destructive. Process-group kill on timeout. No background, no output stream. |
 | Web | Partial | Public-IP check and redirect revalidation exist. DNS is not pinned. Search ignores domain policy. |
 | `sandbox` tool | Partial | Schema and README no longer claim a jail. Still a subprocess with timeout only. |
-| Providers | Partial | Anthropic, OpenAI-compat, Gemini, Groq, Ollama. No OpenRouter class. Stream `done` now carries usage. Gemini function-response names are correct. Anthropic thinking is opt-in. |
+| Providers | Partial | Anthropic, OpenAI-compat, Gemini, Groq, Ollama, OpenRouter. YAML parses `base_url`. Stream `done` now carries usage. Gemini function-response names are correct. Anthropic thinking is opt-in. |
 | MCP | Partial | Stdio tools are callable. Env is merged with `os.environ`. JSON-RPC/`isError` fail. No HTTP, resources, prompts, OAuth. |
 | Plugins | Partial | Lifecycle hooks load at startup. No tools, slash commands, isolation, or packaging. |
 | Skills | Implemented | Catalog then on-demand load. `allowed_tools` and `scripts/` are unused. Schema no longer mentions `list_skills()`. |
@@ -128,8 +128,9 @@ Content-Length / NDJSON remains Wave 3.
 
 ## Wave 2. Providers: OpenRouter, Groq, and the ones we already have
 
-Groq already exists as a thin OpenAI-compat wrapper. OpenRouter is a README
-sentence (`--base-url https://api.openrouter.ai/v1`) and is not a provider.
+Groq already exists as a thin OpenAI-compat wrapper. OpenRouter is a first-class
+wrapper of `OpenAIProvider`. Remaining Wave 2 work is Groq hardening, usage on
+every path, `occ doctor`, and `/cost`.
 
 Do not add a sixth SDK. Keep wrapping `OpenAIProvider` for OpenAI-compat
 hosts. Put provider-specific auth, headers, and model-id rules in small
@@ -143,19 +144,22 @@ wrappers and in the registry.
 | `gpt-*`, `o1-*`, `o3-*`, `o4-*`, `chatgpt-*` | OpenAI |
 | `gemini-*` | Gemini (optional extra) |
 | `groq/llama-3.3-70b-versatile` | Groq |
+| `openrouter/anthropic/claude-sonnet-4` | OpenRouter, sends `anthropic/claude-sonnet-4` |
+| `anthropic/claude-…` with `OPENROUTER_API_KEY` | OpenRouter |
 | `ollama/llama3.2` | Ollama at localhost:11434 |
-| `--base-url https://…` | OpenAI-compat, needs `--api-key` or `OPENAI_API_KEY` |
+| `--base-url` or YAML `base_url` | OpenAI-compat, needs `--api-key` or `OPENAI_API_KEY` |
 | `llama-*` with `GROQ_API_KEY` set | Groq (heuristic) |
 | anything else | Anthropic |
 
 ### Gaps that actually bite
 
-1. `openrouter/anthropic/claude-sonnet-4` without `--base-url` becomes
-   Anthropic. Same for `anthropic/claude-…`, `openai/gpt-4o`, Together,
-   Fireworks, xAI slugs.
-2. YAML does not parse `base_url`. OpenRouter cannot live in `occ.yml`.
-3. OpenRouter wants `OPENROUTER_API_KEY` plus `HTTP-Referer` / `X-Title`.
-   The OpenAI client will look for `OPENAI_API_KEY`.
+1. **Done.** `openrouter/<vendor>/<model>` and `vendor/model` + `OPENROUTER_API_KEY`
+   route to OpenRouter. `groq/` and `ollama/` still win. Explicit `base_url`
+   still wins over the vendor/model heuristic.
+2. **Done.** YAML parses `base_url`. Raw `api_key` is still not written to
+   session snapshots.
+3. **Done.** OpenRouter uses `OPENROUTER_API_KEY` or `--api-key`, plus
+   `HTTP-Referer` / `X-Title`.
 4. Groq unprefixed heuristic steals `deepseek-*` / `llama-*` whenever
    `GROQ_API_KEY` is in the environment.
 5. OpenAI/Groq/Ollama `stream()` drops usage and reasoning. Anthropic
@@ -168,14 +172,14 @@ wrappers and in the registry.
 8. No `list_models()`. No `occ doctor`.
 9. `ProviderStreamEvent` is a second stream vocabulary no provider emits.
 
-### OpenRouter (add)
+### OpenRouter (implemented)
 
-New `providers/openrouter.py`, thin wrap of `OpenAIProvider`:
+`providers/openrouter.py`, thin wrap of `OpenAIProvider`:
 
 ```
 base_url: https://openrouter.ai/api/v1
 api_key:  OPENROUTER_API_KEY or --api-key
-headers:  HTTP-Referer, X-Title (OCC / GitHub URL)
+headers:  HTTP-Referer, X-Title (OCC GitHub URL)
 ```
 
 Registry:
@@ -189,9 +193,9 @@ Registry:
 
 Config:
 
-- Parse `base_url` from YAML (still never persist raw `api_key` into
+- YAML `base_url` is parsed (raw `api_key` is still never persisted into
   session snapshots).
-- Optional `providers:` profiles later. Not required for the first PR.
+- Optional `providers:` profiles later. Not required for this PR.
 
 Tests: registry routing, prefix strip, missing-key error, header defaults.
 Do not hit the live API in CI.
@@ -460,7 +464,8 @@ Add, in order:
    suggest` denies writes, `--ephemeral` writes nothing. **Done**.
 3. Child `permission_mode` clamp. **Done**.
 4. Gemini `functionResponse.name`. **Done**.
-5. OpenRouter / Groq registry cases, including "do not steal `deepseek-*`".
+5. OpenRouter registry cases. **Done** (`tests/test_providers.py`). Groq
+   "do not steal `deepseek-*`" remains PR 12.
 6. MCP env merge + JSON-RPC error → `ToolResult.fail`. **Done**.
 7. Shell `unknown` under `workspace-write`. **Done**.
 8. `git_branch` output shape.
@@ -491,7 +496,7 @@ Small, reviewable, in this order. One concern each.
 | 8 | MCP env merge, stderr drain, RPC errors as failures. | 1 (done) |
 | 9 | Docs pass: README, CHANGELOG, `load_skill` schema, MCP docstring. | 1 (done) |
 | 10 | Shell: deny `unknown` in `workspace-write`, process-group kill, command in approval prompt. | 1 (done) |
-| 11 | First-class OpenRouter provider + YAML `base_url`. | 2 |
+| 11 | First-class OpenRouter provider + YAML `base_url`. | 2 (done) |
 | 12 | Groq heuristic removal, `include_usage`, max_tokens fallback. | 2 |
 | 13 | `occ doctor` + `/cost` from real usage. | 2 |
 | 14 | Skills: enforce `allowed_tools`, expose scripts, fix `list_skills` lie. | 3 |
@@ -502,15 +507,15 @@ Small, reviewable, in this order. One concern each.
 | 19 | Git commit/PR behind explicit policy. | 4 |
 | 20 | Interrupt + background shell + `/verify`. | 4 |
 
-PRs 1–10 landed. Wave 2 starts at PR 11 (OpenRouter).
+PRs 1–11 landed. Wave 2 continues at PR 12 (Groq hardening).
 
 ---
 
 ## What not to do yet
 
 - Do not add another provider SDK (xAI, Together, Fireworks) as a full
-  class. OpenRouter or `--base-url` covers them once the registry stops
-  defaulting unknowns to Anthropic.
+  class. OpenRouter or `--base-url` covers them. Unprefixed unknown slugs
+  still default to Anthropic.
 - Do not build a VS Code extension on top of an exec path that prompts
   Y/n.
 - Do not add a plugin marketplace before plugins can fail loudly and MCP

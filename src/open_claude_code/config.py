@@ -160,6 +160,8 @@ def _parse_config(path: Path) -> AgentConfig:
 
     if "model" in raw:
         config.model = raw["model"]
+    if "base_url" in raw:
+        config.base_url = raw["base_url"]
     if "max_tokens" in raw:
         config.max_tokens = raw["max_tokens"]
     if "max_tool_output" in raw:

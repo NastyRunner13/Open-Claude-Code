@@ -102,6 +102,7 @@ class OpenAIProvider(Provider):
         max_tokens: int = 16000,
         api_key: str | None = None,
         base_url: str | None = None,
+        default_headers: dict[str, str] | None = None,
     ) -> None:
         self.model = model
         self.max_tokens = max_tokens
@@ -110,6 +111,8 @@ class OpenAIProvider(Provider):
             kwargs["api_key"] = api_key
         if base_url:
             kwargs["base_url"] = base_url
+        if default_headers:
+            kwargs["default_headers"] = default_headers
         self.client = AsyncOpenAI(**kwargs)
 
     @property

@@ -3,8 +3,13 @@
 
 # Model (default: claude-sonnet-4-20250514)
 model: "claude-sonnet-4-20250514"
+# model: "openrouter/anthropic/claude-sonnet-4"  # OPENROUTER_API_KEY
 max_tokens: 16000
 max_tool_output: 10000
+
+# OpenAI-compatible endpoint (Together, vLLM, …). OpenRouter does not need this:
+# occ --model openrouter/<vendor>/<model> uses https://openrouter.ai/api/v1.
+# base_url: "https://api.together.xyz/v1"
 
 # Mode: ask | plan | agent
 mode: "agent"

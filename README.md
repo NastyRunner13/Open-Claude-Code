@@ -104,11 +104,14 @@ occ --model gemini-2.0-flash
 # Groq (blazing fast inference)
 occ --model groq/llama-3.3-70b-versatile
 
+# OpenRouter (any catalog model; strips the openrouter/ prefix)
+occ --model openrouter/anthropic/claude-sonnet-4
+
 # Local models via Ollama
 occ --model ollama/llama3.2
 
-# Any OpenAI-compatible endpoint (OpenRouter, Together, vLLM, etc.)
-occ --model my-model --base-url https://api.openrouter.ai/v1
+# Any OpenAI-compatible endpoint (Together, vLLM, etc.)
+occ --model my-model --base-url https://api.together.xyz/v1
 ```
 
 ### Provider detection logic
@@ -119,8 +122,10 @@ occ --model my-model --base-url https://api.openrouter.ai/v1
 | `gpt-*`, `o1-*`, `o3-*`, `o4-*` | OpenAI | `OPENAI_API_KEY` |
 | `gemini-*` | Google Gemini | `GEMINI_API_KEY` |
 | `groq/*` | Groq | `GROQ_API_KEY` |
+| `openrouter/*` | OpenRouter | `OPENROUTER_API_KEY` |
+| `vendor/model` with `OPENROUTER_API_KEY` set | OpenRouter | `OPENROUTER_API_KEY` |
 | `ollama/*` | Ollama (local) | — |
-| `--base-url` flag | OpenAI-compatible | `OPENAI_API_KEY` |
+| `--base-url` / YAML `base_url` | OpenAI-compatible | `OPENAI_API_KEY` |
 
 ---
 
@@ -293,6 +298,7 @@ src/open_claude_code/
 │   ├── openai.py         # GPT, o1, o3, o4, any OpenAI-compatible
 │   ├── gemini.py         # Google Gemini via google-genai
 │   ├── groq.py           # Groq cloud inference
+│   ├── openrouter.py     # OpenRouter (OpenAI-compat + attribution headers)
 │   └── ollama.py         # Local models via Ollama
 │
 ├── tools/                # Tool definitions (schema + implementation)
@@ -358,6 +364,7 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 export OPENAI_API_KEY="sk-..."
 export GEMINI_API_KEY="..."
 export GROQ_API_KEY="gsk_..."
+export OPENROUTER_API_KEY="sk-or-..."
 export OCC_MODEL="gpt-4o"    # Override default model
 ```
 
@@ -366,8 +373,12 @@ export OCC_MODEL="gpt-4o"    # Override default model
 ```yaml
 # Model configuration
 model: "claude-sonnet-4-20250514"
+# model: "openrouter/anthropic/claude-sonnet-4"  # needs OPENROUTER_API_KEY
 max_tokens: 16000
 max_tool_output: 10000
+
+# OpenAI-compatible endpoint (Together, vLLM, …). Not needed for OpenRouter.
+# base_url: "https://api.together.xyz/v1"
 
 # Mode: ask | plan | agent
 mode: "agent"

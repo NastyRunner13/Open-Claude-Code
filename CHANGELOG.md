@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- First-class OpenRouter provider: `openrouter/<vendor>/<model>` (and `vendor/model` when `OPENROUTER_API_KEY` is set). Sends OpenRouter attribution headers. Missing key raises `ProviderError`.
+- YAML `base_url` is parsed so OpenAI-compatible endpoints can live in `occ.yml`.
+
 ### Fixed
 
 - `/plan <task>` and `/agent <task>` now run one-shot plan/agent mode. `/agent list` still lists roles; `/plan show|clear|progress` still manage the checklist.
