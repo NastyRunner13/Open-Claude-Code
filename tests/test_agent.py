@@ -280,7 +280,11 @@ def test_subagent_is_read_only_by_default():
 
     provider = MockProvider([
         ProviderResponse(thinking=None, content=[
-            ToolUseBlock(id="spawn-1", name="spawn_agent", input={"task": "investigate"})
+            ToolUseBlock(
+                id="spawn-1",
+                name="spawn_agent",
+                input={"task": "investigate", "agent_type": "explore"},
+            )
         ]),
         ProviderResponse(thinking=None, content=[
             ToolUseBlock(
@@ -363,3 +367,7 @@ def test_clamp_permission_mode_never_elevates():
     assert clamp_permission_mode("workspace-write", "read-only") == "read-only"
     assert clamp_permission_mode("read-only", "full-access") == "read-only"
     assert clamp_permission_mode("", "workspace-write") == "read-only"
+    assert clamp_permission_mode("", "workspace-write", "inherit") == "workspace-write"
+    assert clamp_permission_mode("full-access", "workspace-write", "inherit") == "workspace-write"
+    assert clamp_permission_mode("all", "read-only") == "read-only"
+    assert clamp_permission_mode("read-write", "full-access") == "workspace-write"

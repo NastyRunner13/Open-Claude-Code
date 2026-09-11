@@ -97,8 +97,10 @@ class TestAgentMode:
         result = asyncio.run(agent.run("read the file"))
 
         assert result == "Done!"
-        assert len(provider.calls[0]["tools"]) == 1
-        assert provider.calls[0]["tools"][0]["name"] == "read_file"
+        names = [item["name"] for item in provider.calls[0]["tools"]]
+        assert "read_file" in names
+        assert "wait_agent" in names
+        assert "run_workflow" in names
 
 
 class TestPlanMode:
