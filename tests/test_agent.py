@@ -306,3 +306,60 @@ def test_subagent_is_read_only_by_default():
     agent = Agent(provider=provider, event_bus=EventBus(), tools=tools, config=AgentConfig())
     assert asyncio.run(agent.run("delegate this")) == "Parent complete"
     assert writes == []
+
+
+def test_subagent_cannot_elevate_above_parent():
+    """A child requesting full-access stays at the parent's workspace-write cap."""
+    shell_calls = []
+
+    async def run_shell(command: str, timeout: int = 60, cwd: str = "") -> str:
+        shell_calls.append(command)
+        return "ran"
+
+    provider = MockProvider([
+        ProviderResponse(thinking=None, content=[
+            ToolUseBlock(
+                id="spawn-1",
+                name="spawn_agent",
+                input={"task": "elevate me", "permission_mode": "full-access"},
+            )
+        ]),
+        ProviderResponse(thinking=None, content=[
+            ToolUseBlock(
+                id="shell-1",
+                name="run_shell",
+                input={"command": "python -c \"open('x','w')\""},
+            )
+        ]),
+        ProviderResponse(thinking=None, content=[TextBlock(text="Child complete")]),
+        ProviderResponse(thinking=None, content=[TextBlock(text="Parent complete")]),
+    ])
+    tools = {
+        "spawn_agent": {
+            "function": None,
+            "schema": {"name": "spawn_agent", "input_schema": {"type": "object"}},
+        },
+        "run_shell": {
+            "function": run_shell,
+            "schema": {"name": "run_shell", "input_schema": {"type": "object"}},
+        },
+    }
+
+    agent = Agent(
+        provider=provider,
+        event_bus=EventBus(),
+        tools=tools,
+        config=AgentConfig(permission_mode="workspace-write"),
+    )
+    assert asyncio.run(agent.run("delegate this")) == "Parent complete"
+    assert shell_calls == []
+
+
+def test_clamp_permission_mode_never_elevates():
+    from open_claude_code.tools.policy import clamp_permission_mode
+
+    assert clamp_permission_mode("full-access", "read-only") == "read-only"
+    assert clamp_permission_mode("full-access", "workspace-write") == "workspace-write"
+    assert clamp_permission_mode("workspace-write", "read-only") == "read-only"
+    assert clamp_permission_mode("read-only", "full-access") == "read-only"
+    assert clamp_permission_mode("", "workspace-write") == "read-only"

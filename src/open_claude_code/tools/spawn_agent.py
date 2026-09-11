@@ -4,8 +4,9 @@ SCHEMA = {
     "name": "spawn_agent",
     "description": (
         "Spawn a sub-agent to handle a subtask independently. "
-        "The sub-agent gets its own conversation history and auto-approves all tool calls. "
-        "Use this for tasks that can run in parallel, like analyzing multiple files or modules."
+        "The child gets its own conversation history and cannot raise privilege "
+        "above this agent. Nested spawn_agent is stripped. Default mode is read-only. "
+        "Output longer than 12k characters is truncated."
     ),
     "input_schema": {
         "type": "object",
@@ -21,7 +22,10 @@ SCHEMA = {
             "permission_mode": {
                 "type": "string",
                 "enum": ["read-only", "workspace-write", "full-access"],
-                "description": "Requested child permission mode. The default is read-only.",
+                "description": (
+                    "Requested child permission mode. Clamped to the parent agent's "
+                    "mode; the child cannot elevate. Default is read-only."
+                ),
             },
             "max_turns": {
                 "type": "integer",

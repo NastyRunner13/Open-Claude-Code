@@ -15,7 +15,7 @@ from open_claude_code.events import (
     SubagentStop,
 )
 from open_claude_code.providers.base import ToolUseBlock
-from open_claude_code.tools.policy import ToolPolicy
+from open_claude_code.tools.policy import ToolPolicy, clamp_permission_mode
 from open_claude_code.subagents.registry import AgentRegistry
 
 if TYPE_CHECKING:
@@ -73,18 +73,17 @@ class SubagentManager:
             }
 
         # The child never inherits recursive spawning. Definitions can narrow
-        # its toolset further; elevation is explicit in the model tool call and
-        # is still gated by the parent's spawn approval.
+        # its toolset further. Requested permission_mode is clamped to the
+        # parent and cannot elevate.
         sub_tools = {k: v for k, v in self.parent.tools.items() if k != "spawn_agent"}
         if definition and definition.tools:
             allowed = set(definition.tools)
             sub_tools = {name: tool for name, tool in sub_tools.items() if name in allowed}
 
         requested_mode = str(block.input.get("permission_mode", ""))
-        policy_mode = (
-            requested_mode if requested_mode in {"read-only", "workspace-write", "full-access"}
-            else (definition.permission_mode if definition else "read-only")
-        )
+        role_mode = definition.permission_mode if definition else "read-only"
+        parent_mode = self.parent.tool_policy.mode
+        policy_mode = clamp_permission_mode(requested_mode, parent_mode, role_mode)
         policy_base = ToolPolicy.from_config(self.parent.config)
         disallowed = tuple(dict.fromkeys((*policy_base.disallowed_tools, *(definition.disallowed_tools if definition else ()))))
         policy = ToolPolicy(mode=policy_mode, disallowed_tools=disallowed)
@@ -97,6 +96,9 @@ class SubagentManager:
             pass
 
         sub_config = replace(self.parent.config) if self.parent.config else None
+        if sub_config:
+            sub_config.permission_mode = policy_mode
+            sub_config.shell_policy = policy_mode
         model = definition.model if definition and definition.model else self.parent.provider.model_name
         sub_provider = self.parent.provider
         if sub_config and definition and definition.model and definition.model != self.parent.provider.model_name:

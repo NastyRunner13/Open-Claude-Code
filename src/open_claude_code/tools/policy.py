@@ -36,6 +36,22 @@ READ_ONLY_TOOLS = frozenset(
     }
 )
 
+_MODE_RANK = {
+    "read-only": 0,
+    "workspace-write": 1,
+    "full-access": 2,
+}
+
+
+def clamp_permission_mode(requested: str, parent_mode: str, role_mode: str = "read-only") -> str:
+    """Never let a child agent raise privilege above its parent."""
+    parent = parent_mode if parent_mode in _MODE_RANK else "workspace-write"
+    fallback = role_mode if role_mode in _MODE_RANK else "read-only"
+    child = requested if requested in _MODE_RANK else fallback
+    if _MODE_RANK[child] > _MODE_RANK[parent]:
+        return parent
+    return child
+
 
 @dataclass(frozen=True)
 class ToolPolicyDecision:
@@ -86,25 +102,38 @@ class ToolPolicy:
                 operation="tool",
             )
 
-        if self.mode != "read-only":
-            return ToolPolicyDecision(True)
-
-        if tool_name in READ_ONLY_TOOLS:
-            return ToolPolicyDecision(True)
-
         if tool_name == "run_shell":
-            command = str((tool_params or {}).get("command", ""))
-            classification = classify_shell_command(command)
-            if classification == "read":
-                return ToolPolicyDecision(True, operation="read")
+            return self._check_shell(str((tool_params or {}).get("command", "")))
+
+        if self.mode == "read-only" and tool_name not in READ_ONLY_TOOLS:
+            return ToolPolicyDecision(
+                False,
+                f"tool '{tool_name}' is unavailable in read-only mode",
+                operation="tool",
+            )
+
+        return ToolPolicyDecision(True)
+
+    def _check_shell(self, command: str) -> ToolPolicyDecision:
+        classification = classify_shell_command(command)
+        if self.mode == "full-access":
+            return ToolPolicyDecision(True, operation=classification)
+        if self.mode == "read-only" and classification != "read":
             return ToolPolicyDecision(
                 False,
                 "non-read-only shell command denied by read-only policy",
                 operation=classification,
             )
-
+        if self.mode == "workspace-write" and classification in {"unknown", "destructive"}:
+            return ToolPolicyDecision(
+                False,
+                f"{classification} shell command denied by workspace-write policy",
+                operation=classification,
+            )
+        if classification == "read" or self.mode == "workspace-write":
+            return ToolPolicyDecision(True, operation=classification)
         return ToolPolicyDecision(
             False,
-            f"tool '{tool_name}' is unavailable in read-only mode",
-            operation="tool",
+            f"tool 'run_shell' is unavailable in {self.mode} mode",
+            operation=classification,
         )
