@@ -41,6 +41,7 @@ class AgentConfig:
         "git_diff",
         "git_log",
         "git_branch",
+        "wait_agent",
     ])
 
     # Filesystem safety. Paths are resolved relative to the process cwd.
@@ -90,6 +91,7 @@ class AgentConfig:
     provider_retry_base_delay: float = 0.5
     max_turns: int = 100
     agents_dirs: list[str] = field(default_factory=lambda: [".occ/agents"])
+    personas_dirs: list[str] = field(default_factory=lambda: [".occ/personas", "~/.occ/personas"])
     hooks: dict[str, list[dict] | list[str]] = field(default_factory=dict)
 
     # Prompt caching (Anthropic only — reduces cost up to 90%)
@@ -220,6 +222,8 @@ def _parse_config(path: Path) -> AgentConfig:
         config.max_turns = raw["max_turns"]
     if "agents_dirs" in raw:
         config.agents_dirs = raw["agents_dirs"]
+    if "personas_dirs" in raw:
+        config.personas_dirs = raw["personas_dirs"]
     if "hooks" in raw and isinstance(raw["hooks"], dict):
         config.hooks = raw["hooks"]
     if "prompt_caching" in raw:

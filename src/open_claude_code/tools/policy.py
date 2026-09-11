@@ -33,6 +33,11 @@ READ_ONLY_TOOLS = frozenset(
         "git_diff",
         "git_log",
         "git_branch",
+        "spawn_agent",
+        "wait_agent",
+        "kill_agent",
+        "send_agent_message",
+        "run_workflow",
     }
 )
 
@@ -43,11 +48,23 @@ _MODE_RANK = {
 }
 
 
+_MODE_ALIASES = {
+    "read-write": "workspace-write",
+    "all": "full-access",
+    "execute": "full-access",
+}
+
+
 def clamp_permission_mode(requested: str, parent_mode: str, role_mode: str = "read-only") -> str:
     """Never let a child agent raise privilege above its parent."""
-    parent = parent_mode if parent_mode in _MODE_RANK else "workspace-write"
-    fallback = role_mode if role_mode in _MODE_RANK else "read-only"
-    child = requested if requested in _MODE_RANK else fallback
+    parent = _MODE_ALIASES.get(parent_mode, parent_mode)
+    parent = parent if parent in _MODE_RANK else "workspace-write"
+    role = _MODE_ALIASES.get(role_mode, role_mode)
+    if role == "inherit":
+        role = parent
+    fallback = role if role in _MODE_RANK else "read-only"
+    child = _MODE_ALIASES.get(requested, requested)
+    child = child if child in _MODE_RANK else fallback
     if _MODE_RANK[child] > _MODE_RANK[parent]:
         return parent
     return child

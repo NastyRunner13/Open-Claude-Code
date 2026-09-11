@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from open_claude_code.tools.edit_file import SCHEMA as EDIT_FILE_SCHEMA
@@ -56,6 +57,7 @@ def get_tools(
     config: "AgentConfig | None" = None,
     event_bus: "EventBus | None" = None,
     session_id: str | None = None,
+    cwd: str | Path | None = None,
 ) -> dict:
     """Return the full tool registry.
 
@@ -63,10 +65,11 @@ def get_tools(
         skill_manager: Optional SkillManager to inject into the load_skill tool.
         config: Optional AgentConfig used to bind runtime tool policy.
         event_bus: Optional EventBus used for policy-denied events.
+        cwd: Optional working directory for path resolution (worktree / child cwd).
     """
     tool_context = (
-        ToolContext.from_config(config=config, event_bus=event_bus, session_id=session_id)
-        if config or event_bus
+        ToolContext.from_config(config=config, event_bus=event_bus, session_id=session_id, cwd=cwd)
+        if config or event_bus or cwd
         else None
     )
 
