@@ -1,7 +1,7 @@
 """MCP (Model Context Protocol) client — connects to external tool servers.
 
 MCP servers expose tools via a standardized protocol. This module:
-1. Connects to MCP servers over stdio or SSE
+1. Connects to MCP servers over stdio
 2. Discovers available tools
 3. Bridges MCP tools into OCC's native tool format
 4. Handles tool invocation by proxying to the MCP server
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -40,9 +41,10 @@ class MCPTool:
 
 
 class MCPClient:
-    """Client for a single MCP server using stdio transport.
+    """Client for a single MCP server using stdio JSON-RPC.
 
-    Communicates via JSON-RPC over stdin/stdout with the MCP server process.
+    Communicates via newline-delimited JSON-RPC over stdin/stdout.
+    Streamable HTTP is not implemented.
     """
 
     def __init__(self, config: MCPServerConfig) -> None:
@@ -52,10 +54,11 @@ class MCPClient:
         self._pending: dict[int, asyncio.Future] = {}
         self._tools: list[MCPTool] = []
         self._reader_task: asyncio.Task | None = None
+        self._stderr_task: asyncio.Task | None = None
 
     async def connect(self) -> None:
         """Start the MCP server process and initialize the connection."""
-        env = dict(self.config.env) if self.config.env else None
+        env = merge_mcp_env(self.config.env)
 
         self._process = await asyncio.create_subprocess_exec(
             self.config.command,
@@ -66,8 +69,9 @@ class MCPClient:
             env=env,
         )
 
-        # Start reading responses
+        # Start reading responses and drain stderr so a noisy server cannot deadlock.
         self._reader_task = asyncio.create_task(self._read_responses())
+        self._stderr_task = asyncio.create_task(self._drain_stderr())
 
         # Initialize protocol
         await self._send_request("initialize", {
@@ -96,6 +100,8 @@ class MCPClient:
         """Shut down the MCP server process."""
         if self._reader_task:
             self._reader_task.cancel()
+        if self._stderr_task:
+            self._stderr_task.cancel()
         if self._process and self._process.returncode is None:
             self._process.terminate()
             try:
@@ -108,27 +114,25 @@ class MCPClient:
         """Tools discovered from this server."""
         return list(self._tools)
 
-    async def call_tool(self, name: str, arguments: dict) -> str:
-        """Invoke a tool on the MCP server."""
+    async def call_tool(self, name: str, arguments: dict) -> ToolResult:
+        """Invoke a tool on the MCP server. JSON-RPC and isError map to failure."""
         result = await self._send_request("tools/call", {
             "name": name,
             "arguments": arguments,
         })
 
         if result is None:
-            return "Error: No response from MCP server"
+            return ToolResult.fail("No response from MCP server", tool_name=name)
 
-        # Extract text from content blocks
-        if "content" in result:
-            parts = []
-            for block in result["content"]:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    parts.append(block.get("text", ""))
-                elif isinstance(block, str):
-                    parts.append(block)
-            return "\n".join(parts) if parts else json.dumps(result)
+        if isinstance(result, dict) and "error" in result:
+            err = result["error"]
+            message = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+            return ToolResult.fail(f"MCP error: {message}", tool_name=name)
 
-        return json.dumps(result)
+        text = _mcp_content_text(result)
+        if isinstance(result, dict) and result.get("isError"):
+            return ToolResult.fail(text or "MCP tool returned isError", tool_name=name)
+        return ToolResult.ok(text or json.dumps(result), tool_name=name)
 
     async def _send_request(self, method: str, params: dict) -> dict | None:
         """Send a JSON-RPC request and wait for the response."""
@@ -199,6 +203,15 @@ class MCPClient:
             except (json.JSONDecodeError, Exception):
                 continue
 
+    async def _drain_stderr(self) -> None:
+        """Read stderr to completion so the pipe cannot fill and deadlock the server."""
+        if not self._process or not self._process.stderr:
+            return
+        while True:
+            line = await self._process.stderr.readline()
+            if not line:
+                break
+
 
 class MCPManager:
     """Manages multiple MCP server connections.
@@ -257,6 +270,9 @@ class MCPManager:
             for tool in client.tools:
                 if tool.name == tool_name:
                     result = await client.call_tool(tool_name, arguments)
+                    if isinstance(result, ToolResult):
+                        result.metadata.setdefault("server_name", name)
+                        return result
                     return ToolResult.ok(
                         result,
                         tool_name=tool_name,
@@ -301,3 +317,26 @@ class MCPManager:
             }
 
         return occ_tools
+
+
+def merge_mcp_env(extra: dict[str, str] | None) -> dict[str, str]:
+    """Merge server env with the current process env so PATH survives `npx`."""
+    env = os.environ.copy()
+    if extra:
+        env.update({str(key): str(value) for key, value in extra.items()})
+    return env
+
+
+def _mcp_content_text(result: object) -> str:
+    """Flatten MCP content blocks into a single string."""
+    if not isinstance(result, dict):
+        return str(result)
+    if "content" not in result:
+        return json.dumps(result) if result else ""
+    parts = []
+    for block in result["content"]:
+        if isinstance(block, dict) and block.get("type") == "text":
+            parts.append(block.get("text", ""))
+        elif isinstance(block, str):
+            parts.append(block)
+    return "\n".join(parts)

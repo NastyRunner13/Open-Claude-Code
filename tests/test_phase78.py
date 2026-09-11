@@ -4,7 +4,8 @@ import asyncio
 from pathlib import Path
 
 from open_claude_code.context import ContextManager, ContextStats, estimate_tokens
-from open_claude_code.mcp.client import MCPManager, MCPServerConfig, MCPTool
+from open_claude_code.mcp.client import MCPClient, MCPManager, MCPServerConfig, MCPTool, merge_mcp_env
+from open_claude_code.tools.result import ToolResult
 from open_claude_code.plugins.manager import PluginHooks, PluginInfo, PluginManager
 
 
@@ -287,3 +288,60 @@ class TestMCPManager:
         assert callable(wrapper)
         assert result.success is True
         assert str(result) == "echo:hello"
+
+    def test_jsonrpc_error_is_tool_failure(self):
+        class FakeClient:
+            tools = [
+                MCPTool(
+                    name="boom",
+                    description="fails",
+                    input_schema={"type": "object", "properties": {}},
+                    server_name="fake",
+                )
+            ]
+
+            async def call_tool(self, name, arguments):
+                return ToolResult.fail("MCP error: no such tool", tool_name=name)
+
+        manager = MCPManager()
+        manager._clients["fake"] = FakeClient()  # type: ignore[assignment]
+        result = asyncio.run(manager.call_tool("boom", {}, server_name="fake"))
+        assert result.success is False
+        assert "MCP error" in str(result)
+
+
+class TestMCPEnvMerge:
+    def test_merge_keeps_path(self, monkeypatch):
+        monkeypatch.setenv("PATH", "/usr/bin")
+        env = merge_mcp_env({"GITHUB_TOKEN": "secret"})
+        assert env["PATH"] == "/usr/bin"
+        assert env["GITHUB_TOKEN"] == "secret"
+
+    def test_merge_empty_extra_is_process_env(self, monkeypatch):
+        monkeypatch.setenv("PATH", "/bin")
+        env = merge_mcp_env({})
+        assert env["PATH"] == "/bin"
+
+
+class TestMCPClientErrorMapping:
+    def test_is_error_flag_fails(self):
+        client = MCPClient(MCPServerConfig(name="t", command="true"))
+
+        async def fake_send(method, params):
+            return {"isError": True, "content": [{"type": "text", "text": "nope"}]}
+
+        client._send_request = fake_send  # type: ignore[method-assign]
+        result = asyncio.run(client.call_tool("echo", {}))
+        assert result.success is False
+        assert "nope" in str(result)
+
+    def test_rpc_error_fails(self):
+        client = MCPClient(MCPServerConfig(name="t", command="true"))
+
+        async def fake_send(method, params):
+            return {"error": {"code": -32601, "message": "Method not found"}}
+
+        client._send_request = fake_send  # type: ignore[method-assign]
+        result = asyncio.run(client.call_tool("echo", {}))
+        assert result.success is False
+        assert "Method not found" in str(result)
