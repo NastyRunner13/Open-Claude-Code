@@ -53,6 +53,7 @@ def _strip_defaults(schema: dict) -> dict:
 def _convert_messages(messages: list[dict]) -> list[dict]:
     """Convert Anthropic-style messages to Gemini content format."""
     contents = []
+    id_to_name: dict[str, str] = {}
     for msg in messages:
         role = msg["role"]
         content = msg["content"]
@@ -74,16 +75,22 @@ def _convert_messages(messages: list[dict]) -> list[dict]:
                     if btype == "text":
                         parts.append({"text": block["text"]})
                     elif btype == "tool_use":
+                        tool_id = str(block.get("id", ""))
+                        name = str(block.get("name", ""))
+                        if tool_id and name:
+                            id_to_name[tool_id] = name
                         parts.append({
                             "functionCall": {
-                                "name": block["name"],
-                                "args": block["input"],
+                                "name": name,
+                                "args": block.get("input", {}),
                             }
                         })
                     elif btype == "tool_result":
+                        tool_id = str(block.get("tool_use_id", ""))
+                        name = id_to_name.get(tool_id) or str(block.get("name", "unknown"))
                         parts.append({
                             "functionResponse": {
-                                "name": block.get("tool_use_id", "unknown"),
+                                "name": name,
                                 "response": {"result": block.get("content", "")},
                             }
                         })
@@ -231,6 +238,8 @@ class GeminiProvider(Provider):
 
         text_parts: list[str] = []
         tool_blocks: list[ToolUseBlock] = []
+        usage = ProviderUsage()
+        metadata = ProviderMetadata(model=self.model)
 
         try:
             # Gemini's streaming is synchronous — run in thread with queue
@@ -266,8 +275,18 @@ class GeminiProvider(Provider):
                     break
 
                 chunk = data
+                usage_meta = getattr(chunk, "usage_metadata", None)
+                if usage_meta:
+                    usage = ProviderUsage(
+                        input_tokens=int(getattr(usage_meta, "prompt_token_count", 0) or 0),
+                        output_tokens=int(getattr(usage_meta, "candidates_token_count", 0) or 0),
+                        cache_read_tokens=int(getattr(usage_meta, "cached_content_token_count", 0) or 0),
+                    )
                 if chunk.candidates:
                     candidate = chunk.candidates[0]
+                    finish = str(getattr(candidate, "finish_reason", "") or "")
+                    if finish:
+                        metadata = ProviderMetadata(model=self.model, finish_reason=finish)
                     if candidate.content and candidate.content.parts:
                         for part in candidate.content.parts:
                             if hasattr(part, "text") and part.text:
@@ -308,5 +327,10 @@ class GeminiProvider(Provider):
 
         yield StreamEvent(
             type="done",
-            response=ProviderResponse(thinking=None, content=content),
+            response=ProviderResponse(
+                thinking=None,
+                content=content,
+                usage=usage,
+                metadata=metadata,
+            ),
         )

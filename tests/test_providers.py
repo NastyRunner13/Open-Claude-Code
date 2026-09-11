@@ -165,3 +165,39 @@ class TestToolSchemaConversion:
         assert result[0]["type"] == "function"
         assert result[0]["function"]["name"] == "read_file"
         assert result[0]["function"]["parameters"]["properties"]["path"]["type"] == "string"
+
+
+class TestGeminiFunctionResponseName:
+    """Gemini needs the declaration name, not the tool_use_id."""
+
+    def test_function_response_uses_declaration_name(self):
+        from open_claude_code.providers.gemini import _convert_messages
+
+        msgs = [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "gemini_abc123", "name": "read_file", "input": {"file_path": "a.py"}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "gemini_abc123", "content": "print(1)"},
+            ]},
+        ]
+        result = _convert_messages(msgs)
+        response = result[1]["parts"][0]["functionResponse"]
+        assert response["name"] == "read_file"
+        assert response["response"]["result"] == "print(1)"
+
+
+class TestAnthropicThinkingOptIn:
+    def test_thinking_enabled_for_sonnet_4(self):
+        from open_claude_code.providers.anthropic import AnthropicProvider
+
+        provider = AnthropicProvider(model="claude-sonnet-4-20250514")
+        kwargs = provider._build_kwargs([], [], "system")
+        assert kwargs["thinking"]["type"] == "enabled"
+
+    def test_thinking_not_forced_on_haiku(self):
+        from open_claude_code.providers.anthropic import AnthropicProvider
+
+        provider = AnthropicProvider(model="claude-3-haiku-20240307")
+        kwargs = provider._build_kwargs([], [], "system")
+        assert "thinking" not in kwargs

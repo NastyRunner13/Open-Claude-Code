@@ -206,17 +206,36 @@ class OpenAIProvider(Provider):
         try:
             kwargs = self._build_kwargs(messages, tools, system_prompt)
             kwargs["stream"] = True
+            kwargs["stream_options"] = {"include_usage": True}
             response = await self.client.chat.completions.create(**kwargs)
         except Exception as e:
             raise ProviderError(str(e)) from e
 
         text_parts: list[str] = []
         tool_calls_acc: dict[int, dict] = {}
+        usage = ProviderUsage()
+        metadata = ProviderMetadata(model=self.model)
 
         try:
             async for chunk in response:
+                chunk_usage = getattr(chunk, "usage", None)
+                if chunk_usage:
+                    usage = ProviderUsage(
+                        input_tokens=int(getattr(chunk_usage, "prompt_tokens", 0) or 0),
+                        output_tokens=int(getattr(chunk_usage, "completion_tokens", 0) or 0),
+                        cache_read_tokens=int(
+                            getattr(getattr(chunk_usage, "prompt_tokens_details", None), "cached_tokens", 0) or 0
+                        ),
+                    )
+                if getattr(chunk, "id", None):
+                    metadata.request_id = str(chunk.id)
+                if getattr(chunk, "model", None):
+                    metadata.model = str(chunk.model)
                 if not chunk.choices:
                     continue
+                finish = getattr(chunk.choices[0], "finish_reason", None)
+                if finish:
+                    metadata.finish_reason = str(finish)
 
                 delta = chunk.choices[0].delta
 
@@ -281,5 +300,10 @@ class OpenAIProvider(Provider):
 
         yield StreamEvent(
             type="done",
-            response=ProviderResponse(thinking=None, content=content),
+            response=ProviderResponse(
+                thinking=None,
+                content=content,
+                usage=usage,
+                metadata=metadata,
+            ),
         )

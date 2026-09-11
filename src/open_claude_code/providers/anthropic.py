@@ -21,6 +21,14 @@ from .base import (
     ToolUseBlock,
 )
 
+# Haiku and older snapshots 400 if extended thinking is forced on.
+_THINKING_MODEL_MARKERS = (
+    "claude-sonnet-4",
+    "claude-opus-4",
+    "claude-3-7-sonnet",
+    "claude-3.7-sonnet",
+)
+
 
 class AnthropicProvider(Provider):
     """Anthropic Claude provider with extended thinking and prompt caching."""
@@ -119,7 +127,7 @@ class AnthropicProvider(Provider):
             "messages": cached_messages,
         }
 
-        if "claude" in self.model:
+        if self._supports_thinking():
             kwargs["thinking"] = {
                 "type": "enabled",
                 "budget_tokens": max(self.max_tokens // 2, 1024),
@@ -137,6 +145,10 @@ class AnthropicProvider(Provider):
                 kwargs["tools"] = tools
 
         return kwargs
+
+    def _supports_thinking(self) -> bool:
+        model = self.model.lower()
+        return any(marker in model for marker in _THINKING_MODEL_MARKERS)
 
     async def send(
         self,
@@ -204,6 +216,8 @@ class AnthropicProvider(Provider):
         current_tool_name = ""
         current_tool_id = ""
         current_tool_json = ""
+        usage = ProviderUsage()
+        metadata = ProviderMetadata(model=self.model)
 
         try:
             async with self.client.messages.stream(**kwargs) as stream:
@@ -269,6 +283,21 @@ class AnthropicProvider(Provider):
                             current_tool_id = ""
                             current_tool_json = ""
 
+                final_message = await stream.get_final_message()
+                final_usage = getattr(final_message, "usage", None)
+                if final_usage:
+                    usage = ProviderUsage(
+                        input_tokens=int(getattr(final_usage, "input_tokens", 0) or 0),
+                        output_tokens=int(getattr(final_usage, "output_tokens", 0) or 0),
+                        cache_read_tokens=int(getattr(final_usage, "cache_read_input_tokens", 0) or 0),
+                        cache_creation_tokens=int(getattr(final_usage, "cache_creation_input_tokens", 0) or 0),
+                    )
+                metadata = ProviderMetadata(
+                    request_id=str(getattr(final_message, "_request_id", "") or ""),
+                    finish_reason=str(getattr(final_message, "stop_reason", "") or ""),
+                    model=self.model,
+                )
+
         except Exception as e:
             raise ProviderError(str(e)) from e
 
@@ -288,5 +317,10 @@ class AnthropicProvider(Provider):
 
         yield StreamEvent(
             type="done",
-            response=ProviderResponse(thinking=thinking_block, content=content),
+            response=ProviderResponse(
+                thinking=thinking_block,
+                content=content,
+                usage=usage,
+                metadata=metadata,
+            ),
         )
