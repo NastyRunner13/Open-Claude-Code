@@ -61,11 +61,15 @@ class PlanningMiddleware(Middleware):
         )
 
     def handle_slash_command(self, cmd: str, rest: str) -> str | None:
-        """Handle /plan slash commands."""
+        """Handle checklist /plan commands. `/plan <task>` is left for one-shot plan mode."""
         if cmd != "/plan":
             return None
 
-        if not rest or rest == "show":
+        # `/plan refactor auth` must reach the mode router, not this checklist handler.
+        if rest not in {"", "show", "clear", "progress"}:
+            return None
+
+        if rest in {"", "show"}:
             console.print()
             if self._store.is_active:
                 console.print(Markdown(self._store.to_markdown()))
@@ -82,19 +86,14 @@ class PlanningMiddleware(Middleware):
             console.print()
             return "handled"
 
-        if rest == "progress":
-            if self._store.is_active:
-                done, total = self._store.progress
-                pct = int((done / total) * 100) if total > 0 else 0
-                bar_len = 20
-                filled = int(bar_len * done / total) if total > 0 else 0
-                bar = "█" * filled + "░" * (bar_len - filled)
-                console.print(f"  {bar}  {done}/{total} ({pct}%)", style="bold cyan")
-            else:
-                console.print("  No active plan.", style="dim")
-            console.print()
-            return "handled"
-
-        console.print("  Usage: /plan [show | clear | progress]", style="dim")
+        if self._store.is_active:
+            done, total = self._store.progress
+            pct = int((done / total) * 100) if total > 0 else 0
+            bar_len = 20
+            filled = int(bar_len * done / total) if total > 0 else 0
+            bar = "█" * filled + "░" * (bar_len - filled)
+            console.print(f"  {bar}  {done}/{total} ({pct}%)", style="bold cyan")
+        else:
+            console.print("  No active plan.", style="dim")
         console.print()
         return "handled"

@@ -338,6 +338,12 @@ class TestPlanningMiddleware:
         result = mw.handle_slash_command("/mode", "agent")
         assert result is None
 
+    def test_slash_command_task_is_not_checklist(self):
+        """`/plan <task>` is one-shot plan mode, not a checklist usage error."""
+        mw = PlanningMiddleware()
+        result = mw.handle_slash_command("/plan", "refactor auth")
+        assert result is None
+
 
 class MockProvider(Provider):
     def __init__(self, responses):

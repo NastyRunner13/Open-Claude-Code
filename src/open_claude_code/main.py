@@ -113,7 +113,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("command", nargs="?", choices=["exec"], help="Run a non-interactive task.")
     parser.add_argument("task", nargs="?", help="Task text for `occ exec`.")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.command == "exec" and not args.task:
+        parser.error("occ exec requires a task argument")
+    return args
 
 
 def resolve_config(args: argparse.Namespace) -> AgentConfig:
@@ -171,22 +174,44 @@ def _json_value(value: object) -> object:
     return str(value)
 
 
-def register_json_listeners(event_bus: EventBus) -> None:
-    """Write automation-safe lifecycle events as one JSON object per line."""
+def register_json_listeners(event_bus: EventBus, *, quiet: bool = False) -> None:
+    """Write automation-safe lifecycle events as one JSON object per line.
+
+    ``quiet`` keeps only the final assistant message, matching ``--quiet``.
+    """
     async def emit(event: object) -> None:
         payload = {"type": type(event).__name__, "data": _json_value(event)}
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True), flush=True)
 
-    for event_type in (
-        Thinking, TokenDelta, ToolCallDelta, UsageUpdated,
-        PreToolUse, PostToolUse, ToolDenied, ProviderFailure, Error,
-    ):
-        event_bus.on(event_type, emit)
+    if not quiet:
+        for event_type in (
+            Thinking, TokenDelta, ToolCallDelta, UsageUpdated,
+            PreToolUse, PostToolUse, ToolDenied, ProviderFailure, Error,
+        ):
+            event_bus.on(event_type, emit)
 
     async def emit_final(event: Stop) -> None:
         print(json.dumps({"type": "final", "data": {"text": event.text}}, ensure_ascii=False), flush=True)
 
     event_bus.on(Stop, emit_final)
+
+
+def register_exec_listeners(
+    event_bus: EventBus,
+    args: argparse.Namespace,
+    config: AgentConfig,
+) -> None:
+    """Wire non-interactive exec listeners. Privileged tools are denied by default."""
+    if args.json:
+        register_json_listeners(event_bus, quiet=args.quiet)
+    if args.approval_mode in {"auto", "full-access"}:
+        register_approval_listener(event_bus, config=config)
+        return
+
+    async def deny_noninteractive(_event: PreToolUse) -> bool:
+        return False
+
+    event_bus.on_approval(deny_noninteractive)
 
 
 def _validate_schema(value: object, schema: dict, label: str = "response") -> None:
@@ -533,26 +558,25 @@ async def handle_slash_command(
 
     if cmd == "/agent":
         if rest not in {"", "list"}:
-            console.print("  Usage: /agent [list]", style="dim")
+            return f"agent:{rest}"
+        registry = AgentRegistry(search_dirs=config.agents_dirs)
+        definitions = registry.definitions
+        if not definitions:
+            console.print("  No role definitions found in .occ/agents.", style="dim")
         else:
-            registry = AgentRegistry(search_dirs=config.agents_dirs)
-            definitions = registry.definitions
-            if not definitions:
-                console.print("  No role definitions found in .occ/agents.", style="dim")
-            else:
-                table = Table(show_header=True, header_style="bold cyan")
-                table.add_column("Name")
-                table.add_column("Permission")
-                table.add_column("Max turns")
-                table.add_column("Description")
-                for definition in definitions.values():
-                    table.add_row(
-                        definition.name,
-                        definition.permission_mode,
-                        str(definition.max_turns),
-                        definition.description,
-                    )
-                console.print(table)
+            table = Table(show_header=True, header_style="bold cyan")
+            table.add_column("Name")
+            table.add_column("Permission")
+            table.add_column("Max turns")
+            table.add_column("Description")
+            for definition in definitions.values():
+                table.add_row(
+                    definition.name,
+                    definition.permission_mode,
+                    str(definition.max_turns),
+                    definition.description,
+                )
+            console.print(table)
         console.print()
         return "handled"
 
@@ -608,18 +632,11 @@ async def run() -> None:
         prompt_caching=config.prompt_caching,
     )
 
-    # Set up event bus and listeners. Exec uses machine-readable output and
-    # must never wait on a terminal approval prompt.
+    # Set up event bus and listeners. Exec is non-interactive: privileged
+    # tools are denied unless --approval-mode auto/full-access is explicit.
     event_bus = EventBus()
     if args.command == "exec":
-        if args.json:
-            register_json_listeners(event_bus)
-        if args.approval_mode == "suggest":
-            async def deny_noninteractive(_event: PreToolUse) -> bool:
-                return False
-            event_bus.on_approval(deny_noninteractive)
-        else:
-            register_approval_listener(event_bus, config=config)
+        register_exec_listeners(event_bus, args, config)
     else:
         register_ui_listeners(event_bus)
         register_approval_listener(event_bus, config=config)
