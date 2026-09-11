@@ -10,6 +10,7 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from open_claude_code.events import (
+    AgentStart,
     EventBus,
     PostToolUse,
     PreToolUse,
@@ -18,8 +19,6 @@ from open_claude_code.events import (
     StreamStart,
     StreamTextDelta,
     StreamThinkingDelta,
-    SubagentStart,
-    SubagentStop,
     Thinking,
     ToolDenied,
     TokenDelta,
@@ -115,6 +114,13 @@ class Agent:
         # Let middleware transform input
         if self.middleware:
             user_input = await self.middleware.on_turn_start(user_input)
+
+        await self.event_bus.emit(
+            AgentStart(
+                task=user_input,
+                mode=self.config.mode if self.config else "agent",
+            )
+        )
 
         self._append_history({"role": "user", "content": user_input})
 
@@ -447,176 +453,7 @@ class Agent:
                 block.name, block.id, block.input, approved=True
             )
         return True, ""
-    async def _legacy_run_streaming(self, user_input: str) -> str:
-        """Run one turn with streaming. Tokens are emitted as they arrive.
 
-        Falls back to non-streaming run() if the provider stream raises.
-        """
-        # Let middleware transform input
-        if self.middleware:
-            user_input = await self.middleware.on_turn_start(user_input)
-
-        self.history.append({"role": "user", "content": user_input})
-
-        tool_schemas = [tool["schema"] for tool in self.tools.values()]
-        system_prompt = self._build_system_prompt()
-
-        while True:
-            self.history = await self._context_mgr.auto_compact_async(self.history)
-
-            # Stream tokens from the provider
-            await self.event_bus.emit(StreamStart())
-
-            response: ProviderResponse | None = None
-            full_text_parts: list[str] = []
-            thinking_parts: list[str] = []
-
-            try:
-                async for event in self.provider.stream(
-                    self.history, tool_schemas, system_prompt
-                ):
-                    if event.type == "text_delta":
-                        full_text_parts.append(event.text)
-                        await self.event_bus.emit(StreamTextDelta(text=event.text))
-
-                    elif event.type == "thinking_delta":
-                        thinking_parts.append(event.text)
-                        await self.event_bus.emit(
-                            StreamThinkingDelta(text=event.text)
-                        )
-
-                    elif event.type == "done":
-                        response = event.response
-
-            except Exception:
-                # Fallback: remove the user message we added, delegate to run()
-                self.history.pop()
-                return await self.run(user_input)
-
-            if response is None:
-                # Should not happen, but guard
-                self.history.pop()
-                return await self.run(user_input)
-
-            full_text = "".join(full_text_parts)
-            await self.event_bus.emit(StreamEnd(full_text=full_text))
-
-            # Emit thinking if present
-            if response.thinking:
-                await self.event_bus.emit(Thinking(text=response.thinking.thinking))
-
-            tool_use_blocks = [
-                b for b in response.content if isinstance(b, ToolUseBlock)
-            ]
-            text_blocks = [
-                b for b in response.content if isinstance(b, TextBlock)
-            ]
-
-            if tool_use_blocks:
-                # Build assistant message for history
-                assistant_content = []
-                if response.thinking:
-                    assistant_content.append({
-                        "type": "thinking",
-                        "thinking": response.thinking.thinking,
-                        "signature": response.thinking.signature,
-                    })
-                for block in response.content:
-                    if isinstance(block, TextBlock):
-                        assistant_content.append(
-                            {"type": "text", "text": block.text}
-                        )
-                    elif isinstance(block, ToolUseBlock):
-                        assistant_content.append({
-                            "type": "tool_use",
-                            "id": block.id,
-                            "name": block.name,
-                            "input": block.input,
-                        })
-                self.history.append(
-                    {"role": "assistant", "content": assistant_content}
-                )
-
-                # Process tools (same logic as run())
-                spawn_blocks = [
-                    b for b in tool_use_blocks if b.name == "spawn_agent"
-                ]
-                regular_blocks = [
-                    b for b in tool_use_blocks if b.name != "spawn_agent"
-                ]
-
-                tool_results = []
-
-                for block in regular_blocks:
-                    requires_approval = block.name not in self._auto_approve
-
-                    approved = await self.event_bus.emit_approval(
-                        PreToolUse(
-                            tool_name=block.name,
-                            tool_params=block.input,
-                            requires_approval=requires_approval,
-                        )
-                    )
-
-                    if approved and block.name in self.tools:
-                        tool_fn = self.tools[block.name]["function"]
-                        try:
-                            result = await tool_fn(**block.input)
-                        except Exception as e:
-                            result = f"Error: {e}"
-                    elif not approved:
-                        result = "Tool call denied by user"
-                    else:
-                        result = f"Unknown tool: {block.name}"
-
-                    result_str = str(result)
-
-                    await self.event_bus.emit(
-                        PostToolUse(
-                            tool_name=block.name,
-                            result=result_str,
-                            tool_use_id=block.id,
-                        )
-                    )
-
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result_str,
-                    })
-
-                if spawn_blocks:
-                    spawn_results = await self._run_subagents(spawn_blocks)
-                    tool_results.extend(spawn_results)
-
-                self.history.append({"role": "user", "content": tool_results})
-
-            else:
-                # Text-only response — we're done
-                text = "\n".join(b.text for b in text_blocks)
-
-                if response.thinking:
-                    assistant_content = [
-                        {
-                            "type": "thinking",
-                            "thinking": response.thinking.thinking,
-                            "signature": response.thinking.signature,
-                        },
-                        {"type": "text", "text": text},
-                    ]
-                    self.history.append(
-                        {"role": "assistant", "content": assistant_content}
-                    )
-                else:
-                    self.history.append(
-                        {"role": "assistant", "content": text}
-                    )
-
-                if self.middleware:
-                    await self.middleware.on_turn_end(text)
-
-                await self.event_bus.emit(Stop(text=text))
-                return text
     async def run_streaming(self, user_input: str) -> str:
         """Run a turn while publishing the legacy streaming UI events."""
         await self.event_bus.emit(StreamStart())

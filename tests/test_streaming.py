@@ -14,6 +14,7 @@ from open_claude_code.providers.base import (
     ToolUseBlock,
 )
 from open_claude_code.events import (
+    AgentStart,
     EventBus,
     StreamStart,
     StreamTextDelta,
@@ -233,6 +234,7 @@ class TestAgentRunStreaming:
         async def capture(event):
             events_received.append(type(event).__name__)
 
+        bus.on(AgentStart, capture)
         bus.on(StreamStart, capture)
         bus.on(StreamTextDelta, capture)
         bus.on(StreamEnd, capture)
@@ -242,6 +244,7 @@ class TestAgentRunStreaming:
         result = await agent.run_streaming("test")
 
         assert result == "Hi there!"
+        assert "AgentStart" in events_received
         assert "StreamStart" in events_received
         assert events_received.count("StreamTextDelta") == 2
         assert "StreamEnd" in events_received

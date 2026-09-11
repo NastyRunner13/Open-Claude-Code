@@ -313,7 +313,7 @@ async def on_stream_end(event: StreamEnd) -> None:
 
 
 async def on_stop(event: Stop) -> None:
-    """Render final response as Rich Markdown in a clean panel."""
+    """Render the final response. Live stream tokens already printed the answer."""
     global _spinner, _tool_count, _turn_start_time
     if _spinner:
         _spinner.stop()
@@ -321,6 +321,15 @@ async def on_stop(event: Stop) -> None:
 
     text = event.text.strip()
     if not text:
+        _tool_count = 0
+        _turn_start_time = None
+        return
+
+    # StreamTextDelta already wrote this text to stdout. Repeating it in a
+    # markdown panel is the double-print users hit on the streaming path.
+    if _stream_text:
+        _tool_count = 0
+        _turn_start_time = None
         return
 
     console.print()
