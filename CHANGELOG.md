@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Sub-agent runtime: built-in `explore` / `plan` / `general-purpose` roles, background spawn + `wait_agent`, `kill_agent`, `send_agent_message` (steer/queue), `resume_from`, `isolation=worktree` with `apply_agent_worktree`, personas from `.occ/personas`, and `run_workflow` phase barriers. Children get their own planning store. Nested spawn stays denied.
 - First-class OpenRouter provider: `openrouter/<vendor>/<model>` (and `vendor/model` when `OPENROUTER_API_KEY` is set). Sends OpenRouter attribution headers. Missing key raises `ProviderError`.
 - YAML `base_url` is parsed so OpenAI-compatible endpoints can live in `occ.yml`.
 
@@ -28,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - `sandbox` schema no longer claims filesystem or network isolation.
-- Built-in tool count documented as 20 (including git, patch, multi-edit, undo).
+- Built-in tool count documented as 25 (including git, patch, multi-edit, undo, and sub-agent coordination).
 - Default `auto_approve` includes read-only git tools and `load_skill`.
 
 ## [0.1.0] — 2026-03-28

@@ -48,7 +48,7 @@ safety claims are only true for the happy path.
 | MCP | Partial | Stdio tools are callable. Env is merged with `os.environ`. JSON-RPC/`isError` fail. No HTTP, resources, prompts, OAuth. |
 | Plugins | Partial | Lifecycle hooks load at startup. No tools, slash commands, isolation, or packaging. |
 | Skills | Implemented | Catalog then on-demand load. `allowed_tools` and `scripts/` are unused. Schema no longer mentions `list_skills()`. |
-| Subagents | Partial | Parallel spawn, roles, default read-only. Child mode is clamped to the parent. Shared middleware still. |
+| Subagents | Implemented | Built-in explore/plan/GP, background wait/kill/steer, resume, worktrees, personas, `run_workflow` barriers. Child planning store is isolated. No Rhai workflow dialect or TUI tasks pane. |
 | Hooks | Partial | Trusted `occ.yml` command hooks. Prompt/HTTP/MCP/agent hooks missing. Post-hooks ignore failure. |
 | Sessions | Partial | JSONL ledger, resume, rename, export. Plan/skills/compaction not restored. Token deltas bloat the file. |
 | `occ exec` | Implemented | Non-interactive default (deny privileged). Missing task exits 2. `--quiet` honored. CLI tests cover argv and approval. |
@@ -292,24 +292,17 @@ is Wave 4. First make the Python hook runtime honest.
 
 ### Subagents
 
-What works: concurrent `asyncio.gather`, role files in `.occ/agents/*.md`,
-model / tool allowlist / `permission_mode` / `max_turns`, nested spawn
-stripped, optional child session.
+**Implemented.** Built-in `explore` / `plan` / `general-purpose` roles,
+project `.occ/agents` files that can shadow them, personas from
+`.occ/personas`, background spawn + `wait_agent` / `kill_agent` /
+`send_agent_message`, `resume_from` on a completed child of the same
+type, `isolation=worktree` plus `apply_agent_worktree`, and
+`run_workflow` phase barriers (8 jobs/phase, 32/workflow). Children get
+their own `PlanningMiddleware`. Nested spawn is still stripped. Default
+blocking spawn is unchanged.
 
-Finish after the Wave 1 elevation fix:
-
-- Do not share the parent's `MiddlewareManager`. A child that can
-  `update_plan` is mutating the parent's checklist because
-  `write_plan` / `update_plan` are in `READ_ONLY_TOOLS`.
-- Built-in roles: `explore` (read-only), `plan` (read-only + plan tools),
-  `general-purpose` (parent cap). Claude Code ships these; we make the
-  user invent `.occ/agents`.
-- Resume a child session from the parent ledger.
-- Truncation at 12k is fine; say so in the schema.
-- Schema text currently says children auto-approve everything. After the
-  clamp, rewrite it.
-
-Worktrees, background children, and nesting wait for Wave 4.
+Not in this runtime: a Rhai workflow dialect, a TUI tasks pane, or
+automatic merge of conflicting worktree edits beyond file copy.
 
 ### Hooks
 
@@ -378,7 +371,7 @@ Only after Waves 1–3. These are the features people mean when they say
 | --- | --- | --- |
 | CLAUDE.md / AGENTS.md | Always-on, nested, user+project | Project-dir files, 8k cap, no walk |
 | Skills | `/name`, auto-invoke, scripts, fork | Catalog + `load_skill` |
-| Subagents | Explore/Plan/GP, nest, worktrees, background | Parallel spawn, roles, no nest |
+| Subagents | Explore/Plan/GP, nest, worktrees, background | Explore/Plan/GP, worktrees, background, no nest |
 | MCP | stdio + streamable HTTP, OAuth, tool search | stdio tools |
 | Hooks | command, HTTP, MCP, prompt, agent | command only |
 | Plugins | bundle + marketplace | local `plugin.py` hooks |
@@ -391,7 +384,7 @@ Only after Waves 1–3. These are the features people mean when they say
 | Cost | `/cost` | events, no UI |
 | Scheduler | `/loop`, GitHub Action, automations | none |
 | IDE | VS Code, app server | terminal only |
-| Worktrees / best-of-N | yes | none |
+| Worktrees / best-of-N | yes | worktrees yes; no best-of-N picker |
 | Images / notebooks / browser | yes | no |
 
 We do not need all of this to be a good terminal agent. We do need the
@@ -418,8 +411,8 @@ cost, interrupt, background long commands.
 8. **LSP tool.** `definition`, `references`, `diagnostics` after edits.
    This is how modern agents stop grepping for symbols. After grep
    ignores and structured grep output, not before.
-9. **Built-in explore/plan/general-purpose subagents.** Then worktrees for
-   best-of-N attempts.
+9. **Best-of-N on worktrees.** Built-in explore/plan/GP and worktrees
+   already exist. What is left is picking a winner and merging it.
 10. **Scheduler** (`/loop`, `/remind`, `/tasks`) and a GitHub Action that
     wraps mature `occ exec --json`. Same runner. No second loop.
 11. **`occ` as an MCP server** so other agents can call us. After our
@@ -500,7 +493,7 @@ Small, reviewable, in this order. One concern each.
 | 12 | Groq heuristic removal, `include_usage`, max_tokens fallback. | 2 |
 | 13 | `occ doctor` + `/cost` from real usage. | 2 |
 | 14 | Skills: enforce `allowed_tools`, expose scripts, fix `list_skills` lie. | 3 |
-| 15 | Subagent isolation (own middleware), built-in explore/plan roles. | 3 |
+| 15 | Subagent isolation (own middleware), built-in explore/plan roles. | 3 (done) |
 | 16 | Session: no per-token ledger, persist plan, `/clear` is real. | 3 |
 | 17 | MCP streamable HTTP + per-server policy. | 3 |
 | 18 | `/review` + `occ review --json`. | 4 |

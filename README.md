@@ -15,11 +15,11 @@
 
 Most AI coding tools lock you into a single model, a single IDE, or a proprietary cloud. **Open Claude Code** gives you a fully local, terminal-native coding agent where *you* pick the brain.
 
-- **Capability-first safety** — non-bypassable tool policy, workspace roots, shell controls, and read-only subagents
+- **Capability-first safety** — non-bypassable tool policy, workspace roots, shell controls, and subagents clamped to the parent
 - **Durable session ledger** — locally persisted JSONL transcripts with run metadata and CLI resume
 
 - 🧠 **Bring any model** — switch from Claude to GPT-4o to a local Llama with a single flag
-- 🛠️ **20 built-in tools** — reversible file edits, code search, Git inspection, shell execution, web search, sandboxed Python, and more
+- 🛠️ **25 built-in tools** — reversible file edits, code search, Git inspection, shell execution, web search, sandboxed Python, coordinated sub-agents, and more
 - 🔌 **Extensible by design** — Skills (YAML+Markdown prompts), Python plugins, and MCP tool servers
 - 📋 **3 interaction modes** — Ask (Q&A), Plan (review-then-execute), Agent (full autonomy)
 - 🧩 **Composable middleware** — Memory, Planning, Skills, and MCP each plug in independently
@@ -177,7 +177,12 @@ Every tool uses a clean schema that any supported LLM can call:
 | `web_search` | Search the web via DuckDuckGo | ✅ |
 | `read_url` | Fetch a URL and strip HTML tags to plain text | ✅ |
 | `sandbox` | Run Python in a subprocess (timeout only — not a filesystem/network jail) | ❌ |
-| `spawn_agent` | Spawn parallel sub-agents for concurrent tasks | ❌ |
+| `spawn_agent` | Spawn a child (`explore` / `plan` / `general-purpose` or `.occ/agents`). Supports `background`, `isolation=worktree`, `resume_from`, `cwd`, `persona` | ❌ |
+| `wait_agent` | Wait for one or more children, or snapshot with `timeout_ms=0` | ✅ |
+| `kill_agent` | Cancel a running child | ❌ |
+| `send_agent_message` | Steer a running child, or `queue=true` for a follow-up turn | ❌ |
+| `apply_agent_worktree` | Copy a child's worktree files into the parent workspace | ❌ |
+| `run_workflow` | Phase barrier: fan-out jobs in parallel, wait, next phase | ❌ |
 | `load_skill` | Dynamically load skills to extend prompts | ✅ |
 | `git_status`, `git_diff`, `git_log`, `git_branch` | Read-only Git inspection for review workflows | ✅ |
 
@@ -312,7 +317,7 @@ src/open_claude_code/
 │   ├── web_search.py     # DuckDuckGo web search
 │   ├── read_url.py       # URL fetching + HTML→markdown conversion
 │   ├── sandbox.py        # Isolated Python execution
-│   ├── spawn_agent.py    # Sub-agent spawning for parallelism
+│   ├── spawn_agent.py    # Sub-agent spawn/wait/kill/steer/worktree/workflow schemas
 │   ├── load_skill.py     # Runtime skill loading
 │   └── result.py         # Structured ToolResult type
 │
@@ -338,7 +343,7 @@ src/open_claude_code/
 │
 ├── skills/               # Skill discovery and management
 ├── plugins/              # Plugin system with lifecycle hooks
-├── subagents/            # Sub-agent spawning and management
+├── subagents/            # Sub-agent manager, built-in roles, personas, worktrees
 └── mcp/                  # MCP client (server process management + tool bridging)
 ```
 
@@ -402,6 +407,7 @@ auto_approve:                 # Tools that skip the approval prompt
   - git_diff
   - git_log
   - git_branch
+  - wait_agent
 
 # Prompt caching (Anthropic only — up to 90% cost reduction)
 prompt_caching: true
@@ -428,6 +434,9 @@ provider_max_retries: 2
 max_turns: 100
 agents_dirs:
   - ".occ/agents"
+personas_dirs:
+  - ".occ/personas"
+  - "~/.occ/personas"
 
 # Extension directories
 skills_dirs:
@@ -485,7 +494,7 @@ Inside the interactive REPL:
 | `/undo <file>` | Restore the latest OCC file snapshot |
 | `/rename <title>` | Give the active session a human-readable title |
 | `/export <path>` | Write a reproducible JSON task capsule |
-| `/agent list` | List custom `.occ/agents/*.md` roles |
+| `/agent list` | List built-in roles (`explore`, `plan`, `general-purpose`) and `.occ/agents` / `.occ/personas` |
 | `/clear` | Clear conversation history |
 | `/help` | Show command reference |
 
@@ -559,7 +568,7 @@ Here are features and improvements planned for future releases:
 - [ ] **Persistent memory** — learn project conventions, build commands, and preferences across sessions
 - [x] **Hooks system** — trusted `occ.yml` command hooks (pre/post tool, stop)
 - [x] **Session export** — export conversation history to a JSON task capsule (`/export`)
-- [ ] **Multi-agent orchestration** — coordinate multiple agents on different parts of a codebase
+- [x] **Multi-agent orchestration** — built-in explore/plan/GP children, background wait, worktrees, resume, steer, and `run_workflow` phase barriers
 - [x] **Diff-based editing** — `apply_patch` applies unified diffs atomically
 - [ ] **Cost tracking** — real-time token usage and spending dashboard (`/cost`)
 

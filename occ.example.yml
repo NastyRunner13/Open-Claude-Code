@@ -41,6 +41,7 @@ auto_approve:
   - git_diff
   - git_log
   - git_branch
+  - wait_agent
 
 # Skill directories (searched in order)
 skills_dirs:
@@ -89,6 +90,9 @@ provider_retry_base_delay: 0.5
 max_turns: 100
 agents_dirs:
   - ".occ/agents"
+personas_dirs:
+  - ".occ/personas"
+  - "~/.occ/personas"
 
 # Trusted project-local lifecycle hooks. Commands receive OCC_TOOL_NAME,
 # OCC_FILE_PATH, OCC_COMMAND, and/or OCC_RESPONSE environment variables.
