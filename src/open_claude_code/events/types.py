@@ -80,6 +80,10 @@ class Stop:
 class SubagentStart:
     """Emitted when a sub-agent begins its task."""
     task: str
+    agent_id: str = ""
+    agent_type: str = ""
+    background: bool = False
+    isolation: str = "none"
 
 
 @dataclass
@@ -87,6 +91,10 @@ class SubagentStop:
     """Emitted when a sub-agent completes its task."""
     task: str
     result: str
+    agent_id: str = ""
+    agent_type: str = ""
+    status: str = "completed"
+    worktree_path: str = ""
 
 
 @dataclass

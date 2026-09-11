@@ -35,6 +35,10 @@ PLAN_GENERATION_TOOLS = {
     "write_plan",
     "update_plan",
     "load_skill",
+    "spawn_agent",
+    "wait_agent",
+    "kill_agent",
+    "send_agent_message",
 }
 
 

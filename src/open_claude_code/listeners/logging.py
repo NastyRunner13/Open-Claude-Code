@@ -92,11 +92,22 @@ def register_logging_listeners(
         logger.info("[Stop] response=%s", preview)
 
     async def on_subagent_start(event: SubagentStart) -> None:
-        logger.info("[SubagentStart] task=%s", event.task)
+        logger.info(
+            "[SubagentStart] id=%s type=%s task=%s",
+            event.agent_id,
+            event.agent_type,
+            event.task,
+        )
 
     async def on_subagent_stop(event: SubagentStop) -> None:
         preview = event.result.strip().replace("\n", " ")[:200]
-        logger.info("[SubagentStop] task=%s result=%s", event.task, preview)
+        logger.info(
+            "[SubagentStop] id=%s status=%s task=%s result=%s",
+            event.agent_id,
+            event.status,
+            event.task,
+            preview,
+        )
 
     event_bus.on(Thinking, on_thinking)
     event_bus.on(PreToolUse, on_pre_tool_use)

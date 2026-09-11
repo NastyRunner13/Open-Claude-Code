@@ -39,7 +39,7 @@ from open_claude_code.modes import run_mode
 from open_claude_code.planning import PlanningMiddleware
 from open_claude_code.providers import ProviderError, create_provider
 from open_claude_code.sessions import SessionStore
-from open_claude_code.subagents import AgentRegistry
+from open_claude_code.subagents import AgentRegistry, PersonaRegistry
 from open_claude_code.system_prompt import MODE_PROMPTS
 from open_claude_code.tools import get_tools
 
@@ -440,7 +440,7 @@ async def handle_slash_command(
         help_table.add_row("/undo <file>", "Restore the latest OCC snapshot for a file")
         help_table.add_row("/rename <title>", "Give the current durable session a title")
         help_table.add_row("/export <path>", "Export current session as a JSON task capsule")
-        help_table.add_row("/agent list", "List reusable .occ/agents role definitions")
+        help_table.add_row("/agent list", "List built-in and .occ/agents subagent roles")
         help_table.add_row("/clear", "Clear conversation history")
         help_table.add_row("/help", "Show this help")
         console.print(help_table)
@@ -560,23 +560,30 @@ async def handle_slash_command(
         if rest not in {"", "list"}:
             return f"agent:{rest}"
         registry = AgentRegistry(search_dirs=config.agents_dirs)
+        personas = PersonaRegistry(search_dirs=config.personas_dirs)
         definitions = registry.definitions
-        if not definitions:
-            console.print("  No role definitions found in .occ/agents.", style="dim")
-        else:
-            table = Table(show_header=True, header_style="bold cyan")
-            table.add_column("Name")
-            table.add_column("Permission")
-            table.add_column("Max turns")
-            table.add_column("Description")
-            for definition in definitions.values():
-                table.add_row(
-                    definition.name,
-                    definition.permission_mode,
-                    str(definition.max_turns),
-                    definition.description,
-                )
-            console.print(table)
+        table = Table(show_header=True, header_style="bold cyan")
+        table.add_column("Name")
+        table.add_column("Source")
+        table.add_column("Permission")
+        table.add_column("Max turns")
+        table.add_column("Description")
+        for definition in definitions.values():
+            table.add_row(
+                definition.name,
+                "built-in" if definition.builtin else "project",
+                definition.permission_mode,
+                str(definition.max_turns),
+                definition.description,
+            )
+        console.print(table)
+        if personas.personas:
+            persona_table = Table(show_header=True, header_style="bold cyan", title="Personas")
+            persona_table.add_column("Name")
+            persona_table.add_column("Description")
+            for persona in personas.personas.values():
+                persona_table.add_row(persona.name, persona.description)
+            console.print(persona_table)
         console.print()
         return "handled"
 

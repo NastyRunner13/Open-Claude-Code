@@ -404,7 +404,12 @@ async def on_subagent_start(event: SubagentStart) -> None:
     line = Text()
     line.append("  ┌─ ", style="dim bright_magenta")
     line.append("🤖 ", style="bold")
-    line.append("Sub-agent: ", style="bold bright_red")
+    label = event.agent_type or "sub-agent"
+    ident = f"{event.agent_id} " if event.agent_id else ""
+    kind = "background " if event.background else ""
+    line.append(f"{kind}{label}: ", style="bold bright_red")
+    if ident:
+        line.append(ident, style="dim")
     line.append(task, style="italic")
     console.print(line)
 
@@ -414,8 +419,10 @@ async def on_subagent_stop(event: SubagentStop) -> None:
     task = event.task[:60] + "…" if len(event.task) > 60 else event.task
     line = Text()
     line.append("  └─ ", style="dim bright_magenta")
-    line.append("✓ ", style="bold green")
-    line.append(f"done: {task}", style="dim")
+    ok = event.status in {"", "completed"}
+    line.append("✓ " if ok else "✗ ", style="bold green" if ok else "bold red")
+    ident = f"{event.agent_id} " if event.agent_id else ""
+    line.append(f"{event.status or 'done'}: {ident}{task}", style="dim")
     console.print(line)
     console.print()
 

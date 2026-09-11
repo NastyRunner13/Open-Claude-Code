@@ -36,6 +36,13 @@ from open_claude_code.providers.base import (
 )
 from open_claude_code.system_prompt import AGENT_SYSTEM_PROMPT
 from open_claude_code.tools.policy import ToolPolicy
+from open_claude_code.tools.spawn_agent import (
+    APPLY_AGENT_WORKTREE_SCHEMA,
+    KILL_AGENT_SCHEMA,
+    RUN_WORKFLOW_SCHEMA,
+    SEND_AGENT_MESSAGE_SCHEMA,
+    WAIT_AGENT_SCHEMA,
+)
 
 
 if TYPE_CHECKING:
@@ -66,6 +73,8 @@ class Agent:
         tool_policy: ToolPolicy | None = None,
         session_store: "SessionStore | None" = None,
         max_turns: int | None = None,
+        is_subagent: bool = False,
+        inbox: asyncio.Queue | None = None,
     ) -> None:
         self.provider = provider
         self.event_bus = event_bus
@@ -77,6 +86,9 @@ class Agent:
         self.max_turns = max(1, max_turns if max_turns is not None else (config.max_turns if config else 100))
         self.history: list[dict] = []
         self.middleware = middleware_manager
+        self.is_subagent = is_subagent
+        self._inbox = inbox
+        self.subagents = None
         self._context_mgr = ContextManager(
             max_context_tokens=config.max_context_tokens if config else 100000,
             provider=provider,
@@ -88,7 +100,12 @@ class Agent:
             self._auto_approve = set(config.auto_approve)
 
         # Planning tools are always auto-approved (they're non-destructive)
-        self._auto_approve.update(["write_plan", "update_plan", "read_plan"])
+        self._auto_approve.update(["write_plan", "update_plan", "read_plan", "wait_agent"])
+
+        if not is_subagent:
+            from open_claude_code.subagents import SubagentManager
+            self.subagents = SubagentManager(self)
+            self._bind_subagent_tools()
 
     async def initialize(self) -> None:
         """Initialize middleware and merge tools/prompts.
@@ -129,6 +146,7 @@ class Agent:
 
         turn_count = 0
         while True:
+            await self._drain_inbox()
             if turn_count >= self.max_turns:
                 raise ProviderError(f"agent exceeded configured maximum of {self.max_turns} provider turns")
             turn_count += 1
@@ -178,13 +196,39 @@ class Agent:
                         })
                 self._append_history({"role": "assistant", "content": assistant_content})
 
-                # Separate spawn_agent from regular tools
+                # Separate spawn_agent from regular tools. Start children first so
+                # wait_agent in the same turn can join them. Results are emitted in
+                # the original tool_use order so providers can match tool_use_id.
                 spawn_blocks = [b for b in tool_use_blocks if b.name == "spawn_agent"]
                 regular_blocks = [b for b in tool_use_blocks if b.name != "spawn_agent"]
+                results_by_id: dict[str, dict] = {}
 
-                tool_results = []
+                if spawn_blocks:
+                    approved_spawns = []
+                    for block in spawn_blocks:
+                        approved, denied_result = await self._authorize_tool_call(block)
+                        if approved:
+                            approved_spawns.append(block)
+                        else:
+                            results_by_id[block.id] = {
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": denied_result,
+                            }
+                            if self.session_store:
+                                self.session_store.record_tool_result(
+                                    block.name, block.id, denied_result
+                                )
+                    spawn_results = await self._run_subagents(approved_spawns)
+                    for result in spawn_results:
+                        results_by_id[result["tool_use_id"]] = result
+                        if self.session_store:
+                            self.session_store.record_tool_result(
+                                "spawn_agent",
+                                result["tool_use_id"],
+                                result["content"],
+                            )
 
-                # Process regular tool calls.
                 for block in regular_blocks:
                     approved, denied_result = await self._authorize_tool_call(block)
 
@@ -206,7 +250,6 @@ class Agent:
                             block.id,
                         )
 
-                    # Convert ToolResult to string for display and LLM
                     result_str = str(result)
 
                     await self.event_bus.emit(
@@ -221,41 +264,13 @@ class Agent:
                             block.name, block.id, result_str
                         )
 
-                    tool_results.append({
+                    results_by_id[block.id] = {
                         "type": "tool_result",
                         "tool_use_id": block.id,
                         "content": result_str,
-                    })
+                    }
 
-                # The spawn itself is a privileged tool call.  Authorize every
-                # requested child before starting the approved children in parallel.
-                if spawn_blocks:
-                    approved_spawns = []
-                    for block in spawn_blocks:
-                        approved, denied_result = await self._authorize_tool_call(block)
-                        if approved:
-                            approved_spawns.append(block)
-                        else:
-                            tool_results.append({
-                                "type": "tool_result",
-                                "tool_use_id": block.id,
-                                "content": denied_result,
-                            })
-                            if self.session_store:
-                                self.session_store.record_tool_result(
-                                    block.name, block.id, denied_result
-                                )
-
-                    spawn_results = await self._run_subagents(approved_spawns)
-                    if self.session_store:
-                        for result in spawn_results:
-                            self.session_store.record_tool_result(
-                                "spawn_agent",
-                                result["tool_use_id"],
-                                result["content"],
-                            )
-                    tool_results.extend(spawn_results)
-
+                tool_results = [results_by_id[block.id] for block in tool_use_blocks]
                 self._append_history({"role": "user", "content": tool_results})
 
             else:
@@ -461,8 +476,51 @@ class Agent:
         await self.event_bus.emit(StreamEnd(full_text=text))
         return text
 
+    def _bind_subagent_tools(self) -> None:
+        """Expose parent-only coordination tools. spawn_agent stays loop-handled."""
+        if self.subagents is None:
+            return
+        self.tools["wait_agent"] = {
+            "function": self.subagents.wait_tool,
+            "schema": WAIT_AGENT_SCHEMA,
+        }
+        self.tools["kill_agent"] = {
+            "function": self.subagents.kill_tool,
+            "schema": KILL_AGENT_SCHEMA,
+        }
+        self.tools["send_agent_message"] = {
+            "function": self.subagents.send_tool,
+            "schema": SEND_AGENT_MESSAGE_SCHEMA,
+        }
+        self.tools["apply_agent_worktree"] = {
+            "function": self.subagents.apply_tool,
+            "schema": APPLY_AGENT_WORKTREE_SCHEMA,
+        }
+        self.tools["run_workflow"] = {
+            "function": self.subagents.workflow_tool,
+            "schema": RUN_WORKFLOW_SCHEMA,
+        }
+
+    async def _drain_inbox(self) -> None:
+        """Inject steered parent messages before the next provider call."""
+        if self._inbox is None:
+            return
+        while True:
+            try:
+                message = self._inbox.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            self._append_history({"role": "user", "content": f"[Parent message]\n{message}"})
+
     async def _run_subagents(self, spawn_blocks: list[ToolUseBlock]) -> list[dict]:
         """Run sub-agents concurrently via the SubagentManager."""
-        from open_claude_code.subagents import SubagentManager
-        manager = SubagentManager(self)
-        return await manager.run(spawn_blocks)
+        if self.subagents is None:
+            return [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": "Nested spawn_agent is not allowed.",
+                }
+                for block in spawn_blocks
+            ]
+        return await self.subagents.run(spawn_blocks)
