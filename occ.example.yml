@@ -32,6 +32,10 @@ auto_approve:
   - web_search
   - read_url
   - load_skill
+  - git_status
+  - git_diff
+  - git_log
+  - git_branch
 
 # Skill directories (searched in order)
 skills_dirs:

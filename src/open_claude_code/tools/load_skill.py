@@ -6,7 +6,7 @@ SCHEMA = {
     "name": "load_skill",
     "description": (
         "Load a skill by name or path. Skills extend your capabilities with "
-        "specialized instructions. Use list_skills() first to see available skills."
+        "specialized instructions. Available skills are listed in the system prompt."
     ),
     "input_schema": {
         "type": "object",

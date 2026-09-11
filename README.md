@@ -165,13 +165,13 @@ Every tool uses a clean schema that any supported LLM can call:
 | `multi_edit` | Apply several exact replacements atomically | ❌ |
 | `apply_patch` | Validate and apply a unified diff atomically | ❌ |
 | `undo_edit` | Restore a before-change OCC snapshot | ❌ |
-| `list_directory` | List directory contents with metadata | ✅ |
+| `list_directory` | List names; directories get a `/` suffix | ✅ |
 | `find_files` | Glob-based file search | ✅ |
-| `grep_search` | Ripgrep-powered code search with context lines | ✅ |
+| `grep_search` | Ripgrep-powered code search (`rg -S`), with a Python fallback | ✅ |
 | `run_shell` | Execute shell commands with output capture | ❌ |
 | `web_search` | Search the web via DuckDuckGo | ✅ |
-| `read_url` | Fetch and parse web pages to markdown | ✅ |
-| `sandbox` | Execute Python code in an isolated subprocess | ❌ |
+| `read_url` | Fetch a URL and strip HTML tags to plain text | ✅ |
+| `sandbox` | Run Python in a subprocess (timeout only — not a filesystem/network jail) | ❌ |
 | `spawn_agent` | Spawn parallel sub-agents for concurrent tasks | ❌ |
 | `load_skill` | Dynamically load skills to extend prompts | ✅ |
 | `git_status`, `git_diff`, `git_log`, `git_branch` | Read-only Git inspection for review workflows | ✅ |
@@ -182,19 +182,20 @@ Every runtime file edit creates a session-scoped snapshot and returns a unified 
 
 ### Safety model
 
-`permission_mode` is an enforced capability boundary, not merely an approval preference. `read-only` permits exploration and read-only Git tools; `workspace-write` permits configured workspace changes but rejects destructive shell commands; `full-access` is explicit opt-in. Filesystem roots, URL scheme/domain rules, public-IP checks, response limits, and network policy are applied before built-in tool execution. Web content is clearly marked as untrusted data before being returned to the model.
+`permission_mode` is an enforced capability boundary, not merely an approval preference. `read-only` permits exploration and read-only Git tools; `workspace-write` permits configured workspace changes, an allowlist of read/write shell commands, and rejects unknown or destructive shell; `full-access` is explicit opt-in. Filesystem roots, URL scheme/domain rules, public-IP checks, response limits, and network policy are applied before built-in tool execution. Tools invoked without a bound `ToolContext` fail closed. Web content is clearly marked as untrusted data before being returned to the model.
 
 ### Non-interactive automation
 
-Use `occ exec` in CI or scripts. It prints the final response to stdout, writes progress as JSON Lines with `--json`, and respects the same sandbox and policy controls as the REPL.
+Use `occ exec` in CI or scripts. It prints the final response to stdout, writes progress as JSON Lines with `--json`, and respects the same sandbox and policy controls as the REPL. Privileged tools are denied unless `--approval-mode auto` or `--approval-mode full-access` is explicit. Missing `task` exits with code 2.
 
 ```bash
 occ exec "Run the targeted tests and summarize failures" --sandbox read-only
 occ exec "Implement the approved plan" --approval-mode auto --output-last-message result.md
 occ exec "Return JSON release notes" --json --output-schema schema.json --ephemeral
+occ exec "Summarize" --json --quiet
 ```
 
-`--approval-mode suggest` denies non-auto-approved tool calls rather than waiting for a terminal prompt. `--ephemeral` leaves no session or snapshot artifacts.
+`--approval-mode suggest` (the default) denies non-auto-approved tool calls rather than waiting for a terminal prompt. `--quiet` keeps only the final `--json` event. `--ephemeral` leaves no session or snapshot artifacts.
 
 ---
 
@@ -242,7 +243,7 @@ def register(hooks):
 
 ### 3. 🌐 MCP — Model Context Protocol
 
-Connect external tool servers that speak the [Model Context Protocol](https://modelcontextprotocol.io/) standard:
+Connect external tool servers that speak the [Model Context Protocol](https://modelcontextprotocol.io/) standard over stdio:
 
 ```yaml
 # In occ.yml
@@ -300,7 +301,7 @@ src/open_claude_code/
 │   ├── edit_file.py      # Surgical search-and-replace editing
 │   ├── grep_search.py    # Ripgrep-powered code search
 │   ├── find_files.py     # Glob-based file finding
-│   ├── list_directory.py # Directory listing with metadata
+│   ├── list_directory.py # Directory listing (names, dirs get `/`)
 │   ├── run_shell.py      # Shell command execution
 │   ├── web_search.py     # DuckDuckGo web search
 │   ├── read_url.py       # URL fetching + HTML→markdown conversion
@@ -386,6 +387,10 @@ auto_approve:                 # Tools that skip the approval prompt
   - web_search
   - read_url
   - load_skill
+  - git_status
+  - git_diff
+  - git_log
+  - git_branch
 
 # Prompt caching (Anthropic only — up to 90% cost reduction)
 prompt_caching: true
@@ -477,6 +482,8 @@ Inside the interactive REPL:
 
 ## 🧪 Development
 
+Setup, tests, PR shape, and safety rules for contributors are in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
 ### Prerequisites
 
 - Python 3.12+
@@ -536,14 +543,14 @@ Here are features and improvements planned for future releases:
 
 - [ ] **Git integration** — automatic staging, committing, branching, and PR creation
 - [x] **File snapshots, diffs & undo** — snapshots and unified diffs for write/edit/patch operations
-- [ ] **Streaming responses** — token-by-token streaming for faster feedback
+- [x] **Streaming responses** — token-by-token streaming across providers
 - [ ] **IDE integration** — VS Code extension and Language Server Protocol support
 - [ ] **Persistent memory** — learn project conventions, build commands, and preferences across sessions
-- [ ] **Hooks system** — pre/post shell hooks for custom automation (linting, formatting, etc.)
-- [ ] **Session export** — export conversation history to Markdown or JSON
+- [x] **Hooks system** — trusted `occ.yml` command hooks (pre/post tool, stop)
+- [x] **Session export** — export conversation history to a JSON task capsule (`/export`)
 - [ ] **Multi-agent orchestration** — coordinate multiple agents on different parts of a codebase
-- [ ] **Diff-based editing** — apply unified diffs instead of string replacement for complex edits
-- [ ] **Cost tracking** — real-time token usage and spending dashboard
+- [x] **Diff-based editing** — `apply_patch` applies unified diffs atomically
+- [ ] **Cost tracking** — real-time token usage and spending dashboard (`/cost`)
 
 See the [improvement analysis](https://github.com/NastyRunner13/Open-Claude-Code/blob/main/IMPROVEMENTS.md) for a detailed comparison with Claude Code and other agents.
 

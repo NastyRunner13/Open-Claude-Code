@@ -36,6 +36,11 @@ class AgentConfig:
         "grep_search",
         "web_search",
         "read_url",
+        "load_skill",
+        "git_status",
+        "git_diff",
+        "git_log",
+        "git_branch",
     ])
 
     # Filesystem safety. Paths are resolved relative to the process cwd.
@@ -94,7 +99,8 @@ class AgentConfig:
     memory_dirs: list[str] = field(default_factory=lambda: ["."])
 
 
-# Default config file search paths (project-local first, then global)
+# Default config file search paths. These are project-local only; there is
+# no user-global config file yet.
 _DEFAULT_PATHS = [
     Path("occ.yml"),
     Path("occ.yaml"),
@@ -128,8 +134,10 @@ def load_config(path: str | Path | None = None) -> AgentConfig:
 
     Search order:
       1. Explicit path (if given)
-      2. Project-local config files
+      2. Project-local config files (occ.yml, occ.yaml, .occ/config.yml)
       3. Defaults
+
+    There is no user-global config path.
     """
     if path is not None:
         config_path = Path(path)

@@ -5,13 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- `/plan <task>` and `/agent <task>` now run one-shot plan/agent mode. `/agent list` still lists roles; `/plan show|clear|progress` still manage the checklist.
+- `occ exec` is non-interactive by default: privileged tools are denied unless `--approval-mode auto` or `full-access` is set. Missing task exits 2. `--quiet` suppresses non-final JSON progress.
+- Child agents cannot raise `permission_mode` above the parent. Spawn approval shows `task` and `permission_mode`.
+- Gemini tool follow-up uses the function declaration name, not `tool_use_id`.
+- Anthropic extended thinking is opt-in for known thinking models, not every `claude*` name.
+- Provider streams attach token usage on `done`.
+- MCP server `env` is merged with the process environment (so `PATH` survives `npx`). Stderr is drained. JSON-RPC `error` and `isError` become `ToolResult.fail`.
+- `workspace-write` denies unknown shell commands, not only a few destructive regexes. Timeouts kill the process group.
+- Unbound filesystem/shell/web tools fail closed instead of skipping policy.
+- Streaming UI no longer reprints the answer in a panel after live tokens. `AgentStart` starts the thinking spinner.
+
+### Changed
+
+- `sandbox` schema no longer claims filesystem or network isolation.
+- Built-in tool count documented as 20 (including git, patch, multi-edit, undo).
+- Default `auto_approve` includes read-only git tools and `load_skill`.
+
 ## [0.1.0] — 2026-03-28
 
 ### Added
 
 - Multi-model support: Anthropic, OpenAI, Google Gemini, Groq, Ollama, and any OpenAI-compatible endpoint.
 - Three interaction modes: `ask`, `plan`, and `agent`.
-- 12 built-in tools: `read_file`, `write_file`, `edit_file`, `list_directory`, `find_files`, `grep_search`, `run_shell`, `web_search`, `read_url`, `sandbox`, `spawn_agent`, `load_skill`.
+- 20 built-in tools: `read_file`, `write_file`, `edit_file`, `multi_edit`, `apply_patch`, `undo_edit`, `list_directory`, `find_files`, `grep_search`, `run_shell`, `web_search`, `read_url`, `sandbox`, `spawn_agent`, `load_skill`, `git_status`, `git_diff`, `git_log`, `git_branch`.
 - Extensible skills system (Markdown+YAML prompt files).
 - Python plugin system with lifecycle hooks.
 - Model Context Protocol (MCP) integration for external tool servers.
