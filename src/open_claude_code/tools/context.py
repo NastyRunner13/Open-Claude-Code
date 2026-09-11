@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
 import re
+import signal
+import subprocess
 from fnmatch import fnmatchcase
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,6 +18,9 @@ from open_claude_code.tools.snapshots import SnapshotStore
 if TYPE_CHECKING:
     from open_claude_code.config import AgentConfig
     from open_claude_code.events import EventBus
+    from open_claude_code.tools.result import ToolResult
+
+UNBOUND_TOOL_ERROR = "tool requires a bound ToolContext; refusing unbound execution"
 
 
 READ_ONLY_COMMANDS = {
@@ -184,6 +191,13 @@ class ToolContext:
                 "destructive shell command denied by policy",
             )
 
+        if policy == "workspace-write" and classification == "unknown":
+            return ShellDecision(
+                False,
+                classification,
+                "unknown shell command denied by workspace-write policy",
+            )
+
         if policy == "read-only" and classification != "read":
             return ShellDecision(
                 False,
@@ -230,6 +244,44 @@ class ToolContext:
                 path=str(path),
             )
         )
+
+
+def unbound_result(tool_name: str) -> "ToolResult":
+    """Fail-closed result when a filesystem/shell/web tool is invoked without context."""
+    from open_claude_code.tools.result import ToolResult
+
+    return ToolResult.fail(UNBOUND_TOOL_ERROR, tool_name=tool_name)
+
+
+def subprocess_isolation_kwargs() -> dict:
+    """Start a new process group so timeout can kill children, not just the parent."""
+    if os.name == "nt":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
+
+
+async def kill_process_tree(process: asyncio.subprocess.Process) -> None:
+    """Kill a subprocess and its children. Used on tool timeout."""
+    if process.returncode is not None or process.pid is None:
+        return
+    if os.name == "nt":
+        killer = await asyncio.create_subprocess_exec(
+            "taskkill",
+            "/F",
+            "/T",
+            "/PID",
+            str(process.pid),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await killer.wait()
+        if process.returncode is None:
+            process.kill()
+        return
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except OSError:
+        process.kill()
 
 
 def classify_shell_command(command: str) -> str:

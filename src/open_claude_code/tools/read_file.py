@@ -1,7 +1,7 @@
 """Read file tool."""
 
 from open_claude_code.tools.result import ToolResult
-from open_claude_code.tools.context import ToolContext
+from open_claude_code.tools.context import ToolContext, unbound_result
 
 MAX_OUTPUT = 10000
 
@@ -48,17 +48,18 @@ async def read_file(
     _context: ToolContext | None = None,
 ) -> ToolResult:
     """Read a file and return its contents."""
+    if _context is None:
+        return unbound_result("read_file")
     target_path = file_path
-    max_output = _context.max_output if _context else MAX_OUTPUT
+    max_output = _context.max_output
 
-    if _context:
-        decision = _context.check_read_path(file_path)
-        if not decision.allowed:
-            await _context.emit_denied(
-                "read_file", decision.reason, operation="read", path=decision.resolved_path
-            )
-            return ToolResult.fail(decision.reason, file_path=str(decision.resolved_path))
-        target_path = str(decision.resolved_path)
+    decision = _context.check_read_path(file_path)
+    if not decision.allowed:
+        await _context.emit_denied(
+            "read_file", decision.reason, operation="read", path=decision.resolved_path
+        )
+        return ToolResult.fail(decision.reason, file_path=str(decision.resolved_path))
+    target_path = str(decision.resolved_path)
 
     try:
         with open(target_path, encoding="utf-8", errors="replace") as f:

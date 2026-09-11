@@ -1,6 +1,6 @@
 """Edit file tool — exact string replacement for surgical edits."""
 
-from open_claude_code.tools.context import ToolContext
+from open_claude_code.tools.context import ToolContext, unbound_result
 from open_claude_code.tools.changes import result_with_diff, unified_diff
 from open_claude_code.tools.result import ToolResult
 
@@ -43,15 +43,15 @@ async def edit_file(
     _context: ToolContext | None = None,
 ) -> ToolResult:
     """Replace old_string with new_string. old_string must be unique in the file."""
-    target_path = file_path
-    if _context:
-        decision = _context.check_write_path(file_path)
-        if not decision.allowed:
-            await _context.emit_denied(
-                "edit_file", decision.reason, operation="write", path=decision.resolved_path
-            )
-            return ToolResult.fail(decision.reason, file_path=str(decision.resolved_path))
-        target_path = str(decision.resolved_path)
+    if _context is None:
+        return unbound_result("edit_file")
+    decision = _context.check_write_path(file_path)
+    if not decision.allowed:
+        await _context.emit_denied(
+            "edit_file", decision.reason, operation="write", path=decision.resolved_path
+        )
+        return ToolResult.fail(decision.reason, file_path=str(decision.resolved_path))
+    target_path = str(decision.resolved_path)
 
     try:
         with open(target_path, encoding="utf-8") as f:
@@ -74,13 +74,13 @@ async def edit_file(
     new_content = content[:first] + new_string + content[first + len(old_string):]
 
     try:
-        snapshot = _context.snapshots.create(target_path) if _context and _context.snapshots else None
+        snapshot = _context.snapshots.create(target_path) if _context.snapshots else None
         with open(target_path, "w", encoding="utf-8") as f:
             f.write(new_content)
     except (PermissionError, OSError) as e:
         return ToolResult.fail(str(e), file_path=target_path)
 
-    diff = unified_diff(content, new_content, target_path, _context.max_output if _context else 10000)
+    diff = unified_diff(content, new_content, target_path, _context.max_output)
     message = f"Successfully edited {target_path}"
     return ToolResult.ok(
         result_with_diff(message, diff),

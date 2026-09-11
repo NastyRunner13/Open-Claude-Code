@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, field
 
 from open_claude_code.tools.changes import unified_diff
-from open_claude_code.tools.context import ToolContext
+from open_claude_code.tools.context import ToolContext, unbound_result
 from open_claude_code.tools.result import ToolResult
 
 
@@ -112,7 +112,7 @@ def _apply_hunks(original: str, patch: FilePatch) -> str:
 async def apply_patch(patch: str, _context: ToolContext | None = None) -> ToolResult:
     """Validate every patch hunk, then apply all files as one transaction."""
     if _context is None:
-        return ToolResult.fail("apply_patch requires a runtime ToolContext")
+        return unbound_result("apply_patch")
     try:
         parsed = _parse_patch(patch)
     except ValueError as exc:

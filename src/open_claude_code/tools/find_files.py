@@ -3,7 +3,7 @@
 import glob
 import os
 
-from open_claude_code.tools.context import ToolContext
+from open_claude_code.tools.context import ToolContext, unbound_result
 from open_claude_code.tools.result import ToolResult
 
 MAX_OUTPUT = 10000
@@ -39,27 +39,26 @@ async def find_files(
     _context: ToolContext | None = None,
 ) -> ToolResult:
     """Find files matching a glob pattern."""
-    target_path = path
-    max_output = _context.max_output if _context else MAX_OUTPUT
-    if _context:
-        decision = _context.check_read_path(path)
-        if not decision.allowed:
-            await _context.emit_denied(
-                "find_files", decision.reason, operation="read", path=decision.resolved_path
-            )
-            return ToolResult.fail(decision.reason, pattern=pattern, path=str(decision.resolved_path))
-        target_path = str(decision.resolved_path)
+    if _context is None:
+        return unbound_result("find_files")
+    max_output = _context.max_output
+    decision = _context.check_read_path(path)
+    if not decision.allowed:
+        await _context.emit_denied(
+            "find_files", decision.reason, operation="read", path=decision.resolved_path
+        )
+        return ToolResult.fail(decision.reason, pattern=pattern, path=str(decision.resolved_path))
+    target_path = str(decision.resolved_path)
 
     try:
         matches = glob.glob(os.path.join(target_path, pattern), recursive=True)
     except (PermissionError, OSError) as e:
         return ToolResult.fail(str(e), pattern=pattern, path=target_path)
 
-    if _context:
-        matches = [
-            match for match in matches
-            if _context.check_read_path(match).allowed
-        ]
+    matches = [
+        match for match in matches
+        if _context.check_read_path(match).allowed
+    ]
 
     if not matches:
         return ToolResult.ok(

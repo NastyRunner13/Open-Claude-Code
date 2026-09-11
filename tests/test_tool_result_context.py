@@ -2,7 +2,20 @@
 
 import pytest
 
+from open_claude_code.config import AgentConfig
+from open_claude_code.tools.context import ToolContext
 from open_claude_code.tools.result import ToolResult
+
+
+def _ctx(tmp_path) -> ToolContext:
+    return ToolContext.from_config(
+        config=AgentConfig(
+            workspace_roots=[str(tmp_path)],
+            writable_roots=[str(tmp_path)],
+            persist_snapshots=False,
+        ),
+        cwd=tmp_path,
+    )
 from open_claude_code.context import (
     ContextManager,
     ContextStats,
@@ -73,15 +86,15 @@ class TestToolsReturnToolResult:
         from open_claude_code.tools.read_file import read_file
         f = tmp_path / "test.txt"
         f.write_text("hello", encoding="utf-8")
-        result = await read_file(str(f))
+        result = await read_file(str(f), _context=_ctx(tmp_path))
         assert isinstance(result, ToolResult)
         assert result.success is True
         assert "hello" in str(result)
 
     @pytest.mark.asyncio
-    async def test_read_file_error_returns_tool_result(self):
+    async def test_read_file_error_returns_tool_result(self, tmp_path):
         from open_claude_code.tools.read_file import read_file
-        result = await read_file("/nonexistent/path")
+        result = await read_file(str(tmp_path / "nonexistent"), _context=_ctx(tmp_path))
         assert isinstance(result, ToolResult)
         assert result.success is False
 
@@ -89,7 +102,7 @@ class TestToolsReturnToolResult:
     async def test_write_file_returns_tool_result(self, tmp_path):
         from open_claude_code.tools.write_file import write_file
         f = tmp_path / "out.txt"
-        result = await write_file(str(f), "content")
+        result = await write_file(str(f), "content", _context=_ctx(tmp_path))
         assert isinstance(result, ToolResult)
         assert result.success is True
         assert result.metadata.get("bytes_written") == 7
@@ -99,7 +112,7 @@ class TestToolsReturnToolResult:
         from open_claude_code.tools.edit_file import edit_file
         f = tmp_path / "edit.txt"
         f.write_text("hello world", encoding="utf-8")
-        result = await edit_file(str(f), "hello", "goodbye")
+        result = await edit_file(str(f), "hello", "goodbye", _context=_ctx(tmp_path))
         assert isinstance(result, ToolResult)
         assert result.success is True
         assert result.metadata.get("chars_removed") == 5
@@ -109,7 +122,7 @@ class TestToolsReturnToolResult:
     async def test_list_directory_returns_tool_result(self, tmp_path):
         from open_claude_code.tools.list_directory import list_directory
         (tmp_path / "file.txt").touch()
-        result = await list_directory(str(tmp_path))
+        result = await list_directory(str(tmp_path), _context=_ctx(tmp_path))
         assert isinstance(result, ToolResult)
         assert result.success is True
 
@@ -117,20 +130,20 @@ class TestToolsReturnToolResult:
     async def test_find_files_returns_tool_result(self, tmp_path):
         from open_claude_code.tools.find_files import find_files
         (tmp_path / "test.py").touch()
-        result = await find_files("*.py", str(tmp_path))
+        result = await find_files("*.py", str(tmp_path), _context=_ctx(tmp_path))
         assert isinstance(result, ToolResult)
         assert result.success is True
 
     @pytest.mark.asyncio
-    async def test_sandbox_returns_tool_result(self):
+    async def test_sandbox_returns_tool_result(self, tmp_path):
         from open_claude_code.tools.sandbox import sandbox
-        result = await sandbox("print('hi')", "python")
+        result = await sandbox("print('hi')", "python", _context=_ctx(tmp_path))
         assert isinstance(result, ToolResult)
 
     @pytest.mark.asyncio
-    async def test_sandbox_unsupported_lang(self):
+    async def test_sandbox_unsupported_lang(self, tmp_path):
         from open_claude_code.tools.sandbox import sandbox
-        result = await sandbox("code", "ruby")
+        result = await sandbox("code", "ruby", _context=_ctx(tmp_path))
         assert isinstance(result, ToolResult)
         assert result.success is False
 

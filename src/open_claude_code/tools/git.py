@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
-from open_claude_code.tools.context import ToolContext
+from open_claude_code.tools.context import ToolContext, unbound_result
 from open_claude_code.tools.result import ToolResult
 
 
@@ -32,15 +31,14 @@ GIT_BRANCH_SCHEMA = _schema("git_branch", "Show the current branch and local bra
 
 
 async def _run_git(args: list[str], context: ToolContext | None, tool_name: str) -> ToolResult:
-    cwd = Path.cwd()
-    max_output = 10000
-    if context:
-        decision = context.check_read_path(context.cwd)
-        if not decision.allowed:
-            await context.emit_denied(tool_name, decision.reason, operation="read", path=decision.resolved_path)
-            return ToolResult.fail(decision.reason)
-        cwd = decision.resolved_path
-        max_output = context.max_output
+    if context is None:
+        return unbound_result(tool_name)
+    decision = context.check_read_path(context.cwd)
+    if not decision.allowed:
+        await context.emit_denied(tool_name, decision.reason, operation="read", path=decision.resolved_path)
+        return ToolResult.fail(decision.reason)
+    cwd = decision.resolved_path
+    max_output = context.max_output
     try:
         process = await asyncio.create_subprocess_exec(
             "git", *args, cwd=str(cwd), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE

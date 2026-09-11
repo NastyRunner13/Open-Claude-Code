@@ -5,7 +5,7 @@ import os
 import re
 import shutil
 
-from open_claude_code.tools.context import ToolContext
+from open_claude_code.tools.context import ToolContext, unbound_result
 from open_claude_code.tools.result import ToolResult
 
 MAX_OUTPUT = 10000
@@ -47,16 +47,16 @@ async def grep_search(
     _context: ToolContext | None = None,
 ) -> ToolResult:
     """Search for pattern in files."""
-    target_path = path
-    max_output = _context.max_output if _context else MAX_OUTPUT
-    if _context:
-        decision = _context.check_read_path(path)
-        if not decision.allowed:
-            await _context.emit_denied(
-                "grep_search", decision.reason, operation="read", path=decision.resolved_path
-            )
-            return ToolResult.fail(decision.reason, pattern=pattern, path=str(decision.resolved_path))
-        target_path = str(decision.resolved_path)
+    if _context is None:
+        return unbound_result("grep_search")
+    max_output = _context.max_output
+    decision = _context.check_read_path(path)
+    if not decision.allowed:
+        await _context.emit_denied(
+            "grep_search", decision.reason, operation="read", path=decision.resolved_path
+        )
+        return ToolResult.fail(decision.reason, pattern=pattern, path=str(decision.resolved_path))
+    target_path = str(decision.resolved_path)
 
     # Try ripgrep first (much faster)
     rg_path = shutil.which("rg")

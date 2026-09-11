@@ -2,7 +2,7 @@
 
 import os
 
-from open_claude_code.tools.context import ToolContext
+from open_claude_code.tools.context import ToolContext, unbound_result
 from open_claude_code.tools.result import ToolResult
 
 MAX_OUTPUT = 10000
@@ -32,19 +32,19 @@ async def list_directory(
     _context: ToolContext | None = None,
 ) -> ToolResult:
     """List entries in a directory."""
-    target_path = path
-    max_output = _context.max_output if _context else MAX_OUTPUT
-    if _context:
-        decision = _context.check_read_path(path)
-        if not decision.allowed:
-            await _context.emit_denied(
-                "list_directory",
-                decision.reason,
-                operation="read",
-                path=decision.resolved_path,
-            )
-            return ToolResult.fail(decision.reason, path=str(decision.resolved_path))
-        target_path = str(decision.resolved_path)
+    if _context is None:
+        return unbound_result("list_directory")
+    max_output = _context.max_output
+    decision = _context.check_read_path(path)
+    if not decision.allowed:
+        await _context.emit_denied(
+            "list_directory",
+            decision.reason,
+            operation="read",
+            path=decision.resolved_path,
+        )
+        return ToolResult.fail(decision.reason, path=str(decision.resolved_path))
+    target_path = str(decision.resolved_path)
 
     try:
         entries = sorted(os.listdir(target_path))

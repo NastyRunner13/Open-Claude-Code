@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from open_claude_code.tools.changes import result_with_diff, unified_diff
-from open_claude_code.tools.context import ToolContext
+from open_claude_code.tools.context import ToolContext, unbound_result
 from open_claude_code.tools.result import ToolResult
 
 
@@ -40,13 +40,13 @@ async def multi_edit(
     _context: ToolContext | None = None,
 ) -> ToolResult:
     """Apply exact replacements as one all-or-nothing change."""
-    target_path = file_path
-    if _context:
-        decision = _context.check_write_path(file_path)
-        if not decision.allowed:
-            await _context.emit_denied("multi_edit", decision.reason, operation="write", path=decision.resolved_path)
-            return ToolResult.fail(decision.reason, file_path=str(decision.resolved_path))
-        target_path = str(decision.resolved_path)
+    if _context is None:
+        return unbound_result("multi_edit")
+    decision = _context.check_write_path(file_path)
+    if not decision.allowed:
+        await _context.emit_denied("multi_edit", decision.reason, operation="write", path=decision.resolved_path)
+        return ToolResult.fail(decision.reason, file_path=str(decision.resolved_path))
+    target_path = str(decision.resolved_path)
     if not edits:
         return ToolResult.fail("edits cannot be empty", file_path=target_path)
 
@@ -72,13 +72,13 @@ async def multi_edit(
         updated = updated[:first] + new + updated[first + len(old):]
 
     try:
-        snapshot = _context.snapshots.create(target_path) if _context and _context.snapshots else None
+        snapshot = _context.snapshots.create(target_path) if _context.snapshots else None
         with open(target_path, "w", encoding="utf-8") as handle:
             handle.write(updated)
     except (PermissionError, OSError) as exc:
         return ToolResult.fail(str(exc), file_path=target_path)
 
-    diff = unified_diff(original, updated, target_path, _context.max_output if _context else 10000)
+    diff = unified_diff(original, updated, target_path, _context.max_output)
     message = f"Successfully applied {len(edits)} edit(s) to {target_path}"
     return ToolResult.ok(
         result_with_diff(message, diff),

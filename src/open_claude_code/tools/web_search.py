@@ -1,6 +1,6 @@
 """Web search tool using DuckDuckGo (free, no API key required)."""
 
-from open_claude_code.tools.context import ToolContext
+from open_claude_code.tools.context import ToolContext, unbound_result
 from open_claude_code.tools.result import ToolResult
 from open_claude_code.tools.web_safety import load_cache, save_cache, untrusted_content
 
@@ -37,15 +37,16 @@ async def web_search(
     _context: ToolContext | None = None,
 ) -> ToolResult:
     """Search the web using DuckDuckGo."""
-    max_output = _context.max_output if _context else MAX_OUTPUT
-    if _context and not _context.network_enabled:
+    if _context is None:
+        return unbound_result("web_search")
+    max_output = _context.max_output
+    if not _context.network_enabled:
         await _context.emit_denied("web_search", "network access is disabled by policy", operation="network")
         return ToolResult.fail("network access is disabled by policy", query=query)
     cache_value = f"{query}\0{max_results}"
-    if _context:
-        cached = load_cache(_context, "search", cache_value)
-        if cached:
-            return ToolResult.ok(cached.get("content", ""), **cached.get("metadata", {}), cached=True)
+    cached = load_cache(_context, "search", cache_value)
+    if cached:
+        return ToolResult.ok(cached.get("content", ""), **cached.get("metadata", {}), cached=True)
     try:
         from duckduckgo_search import DDGS
     except ImportError:
@@ -74,10 +75,8 @@ async def web_search(
     truncated = len(output) > max_output
     if truncated:
         output = output[:max_output] + "\n[truncated]"
-    if _context:
-        output = untrusted_content(f"search query: {query}", output)
+    output = untrusted_content(f"search query: {query}", output)
 
-    metadata = {"query": query, "result_count": len(results), "truncated": truncated, "untrusted": bool(_context)}
-    if _context:
-        save_cache(_context, "search", cache_value, {"content": output, "metadata": metadata})
+    metadata = {"query": query, "result_count": len(results), "truncated": truncated, "untrusted": True}
+    save_cache(_context, "search", cache_value, {"content": output, "metadata": metadata})
     return ToolResult.ok(output, **metadata)

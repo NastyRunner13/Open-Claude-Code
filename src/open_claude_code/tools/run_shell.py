@@ -3,7 +3,12 @@
 import asyncio
 import os
 
-from open_claude_code.tools.context import ToolContext
+from open_claude_code.tools.context import (
+    ToolContext,
+    kill_process_tree,
+    subprocess_isolation_kwargs,
+    unbound_result,
+)
 from open_claude_code.tools.result import ToolResult
 
 MAX_OUTPUT = 10000
@@ -45,40 +50,41 @@ async def run_shell(
     _context: ToolContext | None = None,
 ) -> ToolResult:
     """Run a shell command and return combined stdout/stderr."""
-    max_output = _context.max_output if _context else MAX_OUTPUT
-    run_cwd = None
+    if _context is None:
+        return unbound_result("run_shell")
+
+    max_output = _context.max_output
     classification = "unknown"
 
-    if _context:
-        shell_decision = _context.check_shell(command)
-        classification = shell_decision.classification
-        if not shell_decision.allowed:
-            await _context.emit_denied(
-                "run_shell",
-                shell_decision.reason,
-                operation=classification,
-            )
-            return ToolResult.fail(
-                shell_decision.reason,
-                command=command,
-                classification=classification,
-            )
+    shell_decision = _context.check_shell(command)
+    classification = shell_decision.classification
+    if not shell_decision.allowed:
+        await _context.emit_denied(
+            "run_shell",
+            shell_decision.reason,
+            operation=classification,
+        )
+        return ToolResult.fail(
+            shell_decision.reason,
+            command=command,
+            classification=classification,
+        )
 
-        cwd_decision = _context.check_read_path(cwd or _context.cwd)
-        if not cwd_decision.allowed:
-            await _context.emit_denied(
-                "run_shell",
-                cwd_decision.reason,
-                operation="cwd",
-                path=cwd_decision.resolved_path,
-            )
-            return ToolResult.fail(
-                cwd_decision.reason,
-                command=command,
-                cwd=str(cwd_decision.resolved_path),
-                classification=classification,
-            )
-        run_cwd = str(cwd_decision.resolved_path)
+    cwd_decision = _context.check_read_path(cwd or _context.cwd)
+    if not cwd_decision.allowed:
+        await _context.emit_denied(
+            "run_shell",
+            cwd_decision.reason,
+            operation="cwd",
+            path=cwd_decision.resolved_path,
+        )
+        return ToolResult.fail(
+            cwd_decision.reason,
+            command=command,
+            cwd=str(cwd_decision.resolved_path),
+            classification=classification,
+        )
+    run_cwd = str(cwd_decision.resolved_path)
 
     # Use cmd.exe on Windows, bash/sh on Unix
     if os.name == "nt":
@@ -91,6 +97,7 @@ async def run_shell(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=run_cwd,
+        **subprocess_isolation_kwargs(),
     )
 
     try:
@@ -98,7 +105,7 @@ async def run_shell(
             process.communicate(), timeout=timeout
         )
     except asyncio.TimeoutError:
-        process.kill()
+        await kill_process_tree(process)
         await process.communicate()
         return ToolResult.fail(
             f"Command timed out after {timeout} seconds",

@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from open_claude_code.tools.changes import result_with_diff, unified_diff
-from open_claude_code.tools.context import ToolContext
+from open_claude_code.tools.context import ToolContext, unbound_result
 from open_claude_code.tools.result import ToolResult
 
 SCHEMA = {
@@ -37,22 +37,23 @@ async def write_file(
     _context: ToolContext | None = None,
 ) -> ToolResult:
     """Write content to a file, creating parent directories as needed."""
+    if _context is None:
+        return unbound_result("write_file")
     target_path = file_path
-    if _context:
-        decision = _context.check_write_path(file_path)
-        if not decision.allowed:
-            await _context.emit_denied(
-                "write_file", decision.reason, operation="write", path=decision.resolved_path
-            )
-            return ToolResult.fail(decision.reason, file_path=str(decision.resolved_path))
-        target_path = str(decision.resolved_path)
+    decision = _context.check_write_path(file_path)
+    if not decision.allowed:
+        await _context.emit_denied(
+            "write_file", decision.reason, operation="write", path=decision.resolved_path
+        )
+        return ToolResult.fail(decision.reason, file_path=str(decision.resolved_path))
+    target_path = str(decision.resolved_path)
 
     try:
         target = Path(target_path)
         previous_content = (
             target.read_text(encoding="utf-8", errors="replace") if target.is_file() else ""
         )
-        snapshot = _context.snapshots.create(target) if _context and _context.snapshots else None
+        snapshot = _context.snapshots.create(target) if _context.snapshots else None
         parent = os.path.dirname(target_path)
         if parent:
             os.makedirs(parent, exist_ok=True)
@@ -61,7 +62,7 @@ async def write_file(
     except (PermissionError, OSError) as e:
         return ToolResult.fail(str(e), file_path=target_path)
 
-    diff = unified_diff(previous_content, content, target_path, _context.max_output if _context else 10000)
+    diff = unified_diff(previous_content, content, target_path, _context.max_output)
     message = f"Successfully wrote {len(content)} characters to {target_path}"
     return ToolResult.ok(
         result_with_diff(message, diff),

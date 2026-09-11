@@ -5,7 +5,12 @@ import os
 import sys
 import tempfile
 
-from open_claude_code.tools.context import ToolContext
+from open_claude_code.tools.context import (
+    ToolContext,
+    kill_process_tree,
+    subprocess_isolation_kwargs,
+    unbound_result,
+)
 from open_claude_code.tools.result import ToolResult
 
 MAX_OUTPUT = 10000
@@ -13,9 +18,10 @@ MAX_OUTPUT = 10000
 SCHEMA = {
     "name": "sandbox",
     "description": (
-        "Run code in an isolated environment. "
-        "Supports Python code execution. "
-        "The code runs in a temporary directory and output is captured."
+        "Run Python in a subprocess of this process. This is NOT a filesystem or "
+        "network jail: the interpreter inherits the environment and can read/write "
+        "the same files this agent can. Timeout is the only isolation. "
+        "Prefer run_shell for workspace commands."
     ),
     "input_schema": {
         "type": "object",
@@ -46,8 +52,10 @@ async def sandbox(
     timeout: int = 30,
     _context: ToolContext | None = None,
 ) -> ToolResult:
-    """Run code in an isolated sandbox."""
-    max_output = _context.max_output if _context else MAX_OUTPUT
+    """Run Python in a subprocess. Timeout is the only isolation."""
+    if _context is None:
+        return unbound_result("sandbox")
+    max_output = _context.max_output
     if language != "python":
         return ToolResult.fail(
             f"unsupported language '{language}'. Currently only 'python' is supported.",
@@ -69,6 +77,7 @@ async def sandbox(
             cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            **subprocess_isolation_kwargs(),
         )
 
         try:
@@ -76,7 +85,7 @@ async def sandbox(
                 process.communicate(), timeout=timeout
             )
         except asyncio.TimeoutError:
-            process.kill()
+            await kill_process_tree(process)
             await process.communicate()
             return ToolResult.fail(
                 f"Sandbox execution timed out after {timeout} seconds",
