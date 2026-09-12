@@ -93,6 +93,54 @@ def _convert_messages(messages: list[dict]) -> list[dict]:
     return converted
 
 
+_PARAM_REJECTION_MARKERS = (
+    "unknown",
+    "unsupported",
+    "not supported",
+    "not a valid",
+    "unexpected",
+    "unrecognized",
+    "extra inputs",
+    "invalid parameter",
+)
+_TOOL_REJECTION_MARKERS = (
+    "tool use is not supported",
+    "does not support tool",
+    "does not support function",
+    "function calling is not supported",
+    "function calling is not enabled",
+    "tools is not supported",
+    "tools are not supported",
+    "tool calling is not supported",
+    "tool calling is not enabled",
+    "does not support tools",
+)
+
+
+def _error_status(error: Exception) -> int | None:
+    status = getattr(error, "status_code", None)
+    return status if isinstance(status, int) else None
+
+
+def _error_text(error: Exception) -> str:
+    return str(error).lower()
+
+
+def _is_param_rejection(error: Exception, param: str) -> bool:
+    if _error_status(error) not in (400, 422):
+        return False
+    text = _error_text(error)
+    if param.lower() not in text:
+        return False
+    return any(marker in text for marker in _PARAM_REJECTION_MARKERS)
+
+
+def _is_tool_rejection(error: Exception) -> bool:
+    if _error_status(error) not in (400, 422):
+        return False
+    return any(marker in _error_text(error) for marker in _TOOL_REJECTION_MARKERS)
+
+
 class OpenAIProvider(Provider):
     """OpenAI provider — GPT-4o, o1, o3, and any OpenAI-compatible endpoint."""
 
@@ -114,6 +162,10 @@ class OpenAIProvider(Provider):
         if default_headers:
             kwargs["default_headers"] = default_headers
         self.client = AsyncOpenAI(**kwargs)
+        # Learned per-host: older vLLM/Groq/Ollama want max_tokens; some
+        # reject stream_options.include_usage. Flip on 400 and remember.
+        self._token_param = "max_completion_tokens"
+        self._include_usage = True
 
     @property
     def model_name(self) -> str:
@@ -132,7 +184,6 @@ class OpenAIProvider(Provider):
         kwargs: dict = {
             "model": self.model,
             "messages": openai_messages,
-            "max_completion_tokens": self.max_tokens,
         }
 
         if tools:
@@ -141,6 +192,63 @@ class OpenAIProvider(Provider):
 
         return kwargs
 
+    def _compat_kwargs(self, kwargs: dict, *, stream: bool) -> dict:
+        request = dict(kwargs)
+        request.pop("max_tokens", None)
+        request.pop("max_completion_tokens", None)
+        request[self._token_param] = self.max_tokens
+        if stream:
+            request["stream"] = True
+            if self._include_usage:
+                request["stream_options"] = {"include_usage": True}
+            else:
+                request.pop("stream_options", None)
+        return request
+
+    def _adapt_compat(self, error: Exception, *, stream: bool) -> bool:
+        """Flip remembered compat flags when the host rejects a param. True = retry."""
+        adapted = False
+        if _is_param_rejection(error, self._token_param):
+            self._token_param = (
+                "max_tokens"
+                if self._token_param == "max_completion_tokens"
+                else "max_completion_tokens"
+            )
+            adapted = True
+        if stream and self._include_usage and (
+            _is_param_rejection(error, "stream_options")
+            or _is_param_rejection(error, "include_usage")
+        ):
+            self._include_usage = False
+            adapted = True
+        return adapted
+
+    def _to_provider_error(self, error: Exception, *, tools: bool) -> ProviderError:
+        if tools and _is_tool_rejection(error):
+            return ProviderError(
+                f"This model does not support tool calling ({self.model}). "
+                "Use a tool-capable model, or run in ask mode.",
+                status_code=_error_status(error),
+            )
+        return ProviderError.from_exception(error)
+
+    async def _create(self, kwargs: dict, *, stream: bool):
+        last_error: Exception | None = None
+        tools_sent = bool(kwargs.get("tools"))
+        for _ in range(3):
+            request = self._compat_kwargs(kwargs, stream=stream)
+            try:
+                return await self.client.chat.completions.create(**request)
+            except Exception as error:
+                last_error = error
+                if self._adapt_compat(error, stream=stream):
+                    continue
+                raise self._to_provider_error(error, tools=tools_sent) from error
+        raise self._to_provider_error(
+            last_error or RuntimeError("chat.completions.create failed"),
+            tools=tools_sent,
+        )
+
     async def send(
         self,
         messages: list[dict],
@@ -148,11 +256,8 @@ class OpenAIProvider(Provider):
         system_prompt: str,
     ) -> ProviderResponse:
         """Send messages to OpenAI API and return normalized response."""
-        try:
-            kwargs = self._build_kwargs(messages, tools, system_prompt)
-            response = await self.client.chat.completions.create(**kwargs)
-        except Exception as e:
-            raise ProviderError.from_exception(e) from e
+        kwargs = self._build_kwargs(messages, tools, system_prompt)
+        response = await self._create(kwargs, stream=False)
 
         choice = response.choices[0]
         message = choice.message
@@ -206,13 +311,8 @@ class OpenAIProvider(Provider):
         system_prompt: str,
     ) -> AsyncIterator[StreamEvent]:
         """Stream response tokens from OpenAI using server-sent events."""
-        try:
-            kwargs = self._build_kwargs(messages, tools, system_prompt)
-            kwargs["stream"] = True
-            kwargs["stream_options"] = {"include_usage": True}
-            response = await self.client.chat.completions.create(**kwargs)
-        except Exception as e:
-            raise ProviderError(str(e)) from e
+        kwargs = self._build_kwargs(messages, tools, system_prompt)
+        response = await self._create(kwargs, stream=True)
 
         text_parts: list[str] = []
         tool_calls_acc: dict[int, dict] = {}
@@ -276,7 +376,7 @@ class OpenAIProvider(Provider):
                                 )
 
         except Exception as e:
-            raise ProviderError(str(e)) from e
+            raise ProviderError.from_exception(e) from e
 
         content: list[TextBlock | ToolUseBlock] = []
         full_text = "".join(text_parts)
