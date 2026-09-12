@@ -20,6 +20,8 @@ from prompt_toolkit import PromptSession, HTML
 from open_claude_code import __version__
 from open_claude_code.agent import Agent
 from open_claude_code.config import AgentConfig, load_config, save_config
+from open_claude_code.cost import render_cost_report
+from open_claude_code.doctor import run_doctor_cli
 from open_claude_code.events import (
     EventBus, Error, PostToolUse, PreToolUse, Stop, Thinking, ToolDenied,
     TokenDelta, ToolCallDelta, UsageUpdated, ProviderFailure,
@@ -96,7 +98,24 @@ def parse_args() -> argparse.Namespace:
         help="Resume a durable session from .occ/sessions",
     )
     parser.add_argument("--version", action="version", version=f"Open Claude Code {__version__}")
-    parser.add_argument("--json", action="store_true", help="Emit lifecycle events as JSON Lines (exec mode).")
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="JSON output: exec lifecycle events, or the occ doctor report.",
+    )
+    parser.add_argument(
+        "--max-budget",
+        type=float,
+        default=None,
+        metavar="USD",
+        help="Stop the agent when known session cost reaches this USD amount.",
+    )
+    parser.add_argument(
+        "--report",
+        default=None,
+        metavar="PATH",
+        help="Write the occ doctor JSON report to PATH.",
+    )
     parser.add_argument("--output-last-message", metavar="PATH", help="Write the final assistant message to PATH (exec mode).")
     parser.add_argument("--output-schema", metavar="PATH", help="Validate the final exec message against a JSON schema subset.")
     parser.add_argument("--ephemeral", action="store_true", help="Do not write session or snapshot artifacts for this run.")
@@ -111,7 +130,12 @@ def parse_args() -> argparse.Namespace:
         choices=["suggest", "auto", "full-access"],
         help="Exec approval mode: deny privileged calls, auto-approve permitted calls, or full access.",
     )
-    parser.add_argument("command", nargs="?", choices=["exec"], help="Run a non-interactive task.")
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=["exec", "doctor"],
+        help="exec runs a non-interactive task; doctor reports environment health.",
+    )
     parser.add_argument("task", nargs="?", help="Task text for `occ exec`.")
     args = parser.parse_args()
     if args.command == "exec" and not args.task:
@@ -156,6 +180,9 @@ def resolve_config(args: argparse.Namespace) -> AgentConfig:
         config.skip_approval = True
         config.permission_mode = "full-access"
         config.shell_policy = "full-access"
+
+    if args.max_budget is not None:
+        config.max_budget_usd = args.max_budget
 
     return config
 
@@ -435,6 +462,7 @@ async def handle_slash_command(
         help_table.add_row("/memory reload", "Rescan for memory files")
         help_table.add_row("/memory show", "Preview loaded memory content")
         help_table.add_row("/status", "Show model, permissions, context, and session details")
+        help_table.add_row("/cost", "Show token usage, USD cost, API duration, and lines changed")
         help_table.add_row("/sessions", "List durable local sessions")
         help_table.add_row("/changes", "Show current Git status and uncommitted diff")
         help_table.add_row("/undo <file>", "Restore the latest OCC snapshot for a file")
@@ -464,6 +492,16 @@ async def handle_slash_command(
     if cmd == "/clear":
         agent.history.clear()
         console.print("  Conversation history cleared.", style="dim")
+        console.print()
+        return "handled"
+
+    if cmd == "/cost":
+        console.print()
+        tracker = getattr(agent, "cost_tracker", None)
+        if tracker is None:
+            console.print("  Cost tracking is unavailable.", style="dim")
+        else:
+            console.print(render_cost_report(tracker.snapshot()))
         console.print()
         return "handled"
 
@@ -613,6 +651,11 @@ async def run() -> None:
     args = parse_args()
     config = resolve_config(args)
 
+    if args.command == "doctor":
+        raise SystemExit(
+            run_doctor_cli(config, json_output=args.json, report_path=args.report)
+        )
+
     session_store: SessionStore | None = None
     if args.resume:
         session_store = SessionStore.resume(args.resume, config=config)
@@ -688,6 +731,7 @@ async def run() -> None:
 
     if session_store and args.resume:
         agent.history = session_store.load_history()
+        agent.cost_tracker.restore_from_session(session_store)
 
     # Initialize middleware (connects MCP servers, etc.)
     await agent.initialize()

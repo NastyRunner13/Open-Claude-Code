@@ -9,7 +9,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from open_claude_code.config import AgentConfig
-from open_claude_code.events import EventBus, PreToolUse, Stop, Thinking
+from open_claude_code.cost import CostTracker
+from open_claude_code.events import EventBus, PreToolUse, Stop, Thinking, UsageUpdated
 from open_claude_code.main import (
     handle_slash_command,
     parse_args,
@@ -183,3 +184,30 @@ async def test_exec_ephemeral_disables_persistence(monkeypatch):
     config = resolve_config(args)
     assert config.persist_sessions is False
     assert config.persist_snapshots is False
+
+
+def test_doctor_command_parses_json_and_report(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["occ", "doctor", "--json", "--report", "out.json"])
+    args = parse_args()
+    assert args.command == "doctor"
+    assert args.json is True
+    assert args.report == "out.json"
+
+
+def test_max_budget_cli_overrides_config(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["occ", "--max-budget", "2.5"])
+    args = parse_args()
+    config = resolve_config(args)
+    assert config.max_budget_usd == 2.5
+
+
+@pytest.mark.asyncio
+async def test_cost_slash_command_is_handled():
+    config, agent, mgr = _slash_env()
+    tracker = CostTracker()
+    tracker.record_usage(
+        UsageUpdated(input_tokens=100, output_tokens=20, model="claude-sonnet-4")
+    )
+    agent.cost_tracker = tracker
+    result = await handle_slash_command("/cost", config, agent, mgr)
+    assert result == "handled"
