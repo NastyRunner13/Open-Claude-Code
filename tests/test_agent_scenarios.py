@@ -95,6 +95,48 @@ def test_xml_tool_call_from_openai_compat_is_executed():
     assert calls == ["ping"]
 
 
+def test_ollama_native_tool_call_round_trips_history():
+    """Agent loop against native /api/chat: tool call, then tool result is resent."""
+    import json
+
+    from open_claude_code.providers.ollama import OllamaProvider
+
+    from tests.test_providers import _FakeOllamaResponse, _bind_ollama
+
+    tools, calls = _echo_tools()
+    tool_turn = json.dumps({
+        "message": {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "function": {"name": "echo", "arguments": {"message": "ping"}},
+            }],
+        },
+        "done": True,
+        "done_reason": "stop",
+        "prompt_eval_count": 6,
+        "eval_count": 2,
+    })
+    final_turn = json.dumps({
+        "message": {"role": "assistant", "content": "echoed it"},
+        "done": True,
+        "done_reason": "stop",
+        "prompt_eval_count": 9,
+        "eval_count": 3,
+    })
+    provider, client = _bind_ollama(OllamaProvider(model="ollama/llama3.2"), [
+        _FakeOllamaResponse(lines=[tool_turn]),
+        _FakeOllamaResponse(lines=[final_turn]),
+    ])
+    agent = Agent(provider=provider, event_bus=EventBus(), tools=tools, config=_config())
+    assert asyncio.run(agent.run("echo ping")) == "echoed it"
+    assert calls == ["ping"]
+    assert all(req["url"].endswith("/api/chat") for req in client.requests)
+    assert client.requests[0]["json"]["options"]["num_ctx"] == 32768
+    second = client.requests[1]["json"]["messages"]
+    assert any(msg.get("role") == "tool" and "echoed:ping" in str(msg.get("content")) for msg in second)
+
+
 def test_scripted_tool_then_final_text():
     tools, calls = _echo_tools()
     provider = ScriptedProvider([

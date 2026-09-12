@@ -515,3 +515,312 @@ class TestOpenAICompatFallback:
             asyncio.run(drain())
         assert exc.value.transient
         assert exc.value.status_code == 429
+
+
+class _FakeOllamaResponse:
+    def __init__(self, *, status_code=200, json_body=None, lines=None, text=""):
+        import json as _json
+        self.status_code = status_code
+        self._json = json_body
+        self._lines = lines or []
+        if text:
+            self.text = text
+        elif json_body is not None:
+            self.text = _json.dumps(json_body)
+        else:
+            self.text = "\n".join(self._lines)
+
+    def json(self):
+        import json as _json
+        if self._json is None:
+            raise _json.JSONDecodeError("no json", self.text, 0)
+        return self._json
+
+    async def aread(self):
+        return self.text.encode()
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+
+class _FakeOllamaClient:
+    def __init__(self, responses: list):
+        self.requests: list[dict] = []
+        self._responses = list(responses)
+        self.is_closed = False
+
+    def _next(self, url, json_body, stream):
+        self.requests.append({"url": url, "json": json_body, "stream": stream})
+        if not self._responses:
+            raise AssertionError("no fake Ollama responses left")
+        return self._responses.pop(0)
+
+    async def post(self, url, json=None):
+        return self._next(url, json, False)
+
+    def stream(self, method, url, json=None):
+        return self._next(url, json, True)
+
+
+def _bind_ollama(provider, responses):
+    client = _FakeOllamaClient(responses)
+    provider._client = client
+    return provider, client
+
+
+class TestOllamaNative:
+    def test_strips_v1_and_sends_num_ctx(self):
+        from open_claude_code.providers.ollama import DEFAULT_NUM_CTX, OllamaProvider
+
+        p = OllamaProvider(model="ollama/llama3.2", base_url="http://localhost:11434/v1")
+        assert p.base_url == "http://localhost:11434"
+        assert p.num_ctx == DEFAULT_NUM_CTX
+        assert p.model == "llama3.2"
+        payload = p._payload([], [], "sys", stream=True)
+        assert payload["model"] == "llama3.2"
+        assert payload["options"]["num_ctx"] == DEFAULT_NUM_CTX
+        assert payload["options"]["num_predict"] == 16000
+        assert payload["stream"] is True
+        assert payload["messages"][0] == {"role": "system", "content": "sys"}
+
+    def test_num_ctx_from_env(self, monkeypatch):
+        from open_claude_code.providers.ollama import OllamaProvider
+
+        monkeypatch.setenv("OCC_OLLAMA_NUM_CTX", "8192")
+        p = OllamaProvider(model="llama3.2")
+        assert p.num_ctx == 8192
+
+    def test_explicit_num_ctx_wins_over_env(self, monkeypatch):
+        from open_claude_code.providers.ollama import OllamaProvider
+
+        monkeypatch.setenv("OCC_OLLAMA_NUM_CTX", "8192")
+        p = OllamaProvider(model="llama3.2", num_ctx=4096)
+        assert p.num_ctx == 4096
+
+    def test_ollama_host_env(self, monkeypatch):
+        from open_claude_code.providers.ollama import OllamaProvider, normalize_ollama_url
+
+        monkeypatch.setenv("OLLAMA_HOST", "192.168.1.9:11434")
+        assert normalize_ollama_url(None) == "http://192.168.1.9:11434"
+        p = OllamaProvider(model="llama3.2")
+        assert p.base_url == "http://192.168.1.9:11434"
+
+    def test_create_provider_passes_num_ctx(self):
+        from open_claude_code.providers.ollama import OllamaProvider
+
+        p = create_provider("ollama/qwen2.5-coder", num_ctx=16384)
+        assert isinstance(p, OllamaProvider)
+        assert p.num_ctx == 16384
+        assert p.model_name == "ollama/qwen2.5-coder"
+
+    def test_convert_tool_history_uses_native_shape(self):
+        from open_claude_code.providers.ollama import convert_messages
+
+        history = [
+            {"role": "user", "content": "read it"},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "I should read", "signature": ""},
+                {"type": "tool_use", "id": "call_1", "name": "read_file", "input": {"file_path": "a.py"}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "call_1", "content": "print(1)"},
+            ]},
+        ]
+        out = convert_messages(history)
+        assert out[0] == {"role": "user", "content": "read it"}
+        assert out[1]["role"] == "assistant"
+        assert out[1]["thinking"] == "I should read"
+        assert out[1]["tool_calls"][0]["function"] == {
+            "name": "read_file",
+            "arguments": {"file_path": "a.py"},
+        }
+        assert out[2] == {"role": "tool", "content": "print(1)", "tool_name": "read_file"}
+
+    def test_send_maps_usage_and_native_tool_calls(self):
+        import asyncio
+
+        from open_claude_code.providers.base import ToolUseBlock
+        from open_claude_code.providers.ollama import OllamaProvider
+
+        tools = [{"name": "echo", "description": "Echo", "input_schema": {"type": "object"}}]
+        body = {
+            "model": "llama3.2",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "function": {
+                        "name": "echo",
+                        "arguments": {"message": "hi"},
+                    }
+                }],
+            },
+            "done": True,
+            "done_reason": "stop",
+            "prompt_eval_count": 11,
+            "eval_count": 4,
+            "prompt_eval_cached_count": 2,
+            "total_duration": 2_000_000_000,
+        }
+        provider, client = _bind_ollama(OllamaProvider(model="ollama/llama3.2"), [
+            _FakeOllamaResponse(json_body=body),
+        ])
+        result = asyncio.run(provider.send([{"role": "user", "content": "hi"}], tools, "sys"))
+        assert client.requests[0]["url"].endswith("/api/chat")
+        assert "/v1" not in client.requests[0]["url"]
+        assert client.requests[0]["json"]["options"]["num_ctx"] == 32768
+        assert client.requests[0]["json"]["stream"] is False
+        blocks = [b for b in result.content if isinstance(b, ToolUseBlock)]
+        assert blocks[0].name == "echo"
+        assert blocks[0].input == {"message": "hi"}
+        assert blocks[0].id == "ollama_tool_0"
+        assert result.usage.input_tokens == 11
+        assert result.usage.output_tokens == 4
+        assert result.usage.cache_read_tokens == 2
+        assert result.metadata.latency_ms == 2000.0
+
+    def test_send_recovers_xml_tool_calls(self):
+        import asyncio
+
+        from open_claude_code.providers.base import ToolUseBlock
+        from open_claude_code.providers.ollama import OllamaProvider
+
+        tools = [{"name": "echo", "description": "Echo", "input_schema": {"type": "object"}}]
+        xml = '<tool_call>{"name": "echo", "arguments": {"message": "ping"}}</tool_call>'
+        provider, _client = _bind_ollama(OllamaProvider(model="qwen2.5"), [
+            _FakeOllamaResponse(json_body={
+                "message": {"role": "assistant", "content": xml},
+                "done": True,
+            }),
+        ])
+        result = asyncio.run(provider.send([], tools, "sys"))
+        blocks = [b for b in result.content if isinstance(b, ToolUseBlock)]
+        assert blocks[0].name == "echo"
+        assert blocks[0].input == {"message": "ping"}
+
+    def test_stream_text_thinking_usage(self):
+        import asyncio
+        import json
+
+        from open_claude_code.providers.ollama import OllamaProvider
+
+        lines = [
+            json.dumps({"message": {"role": "assistant", "thinking": "hmm "}, "done": False}),
+            json.dumps({"message": {"role": "assistant", "thinking": "ok", "content": "Hi"}, "done": False}),
+            json.dumps({
+                "model": "llama3.2",
+                "message": {"role": "assistant", "content": " there"},
+                "done": True,
+                "done_reason": "stop",
+                "prompt_eval_count": 5,
+                "eval_count": 3,
+            }),
+        ]
+        provider, client = _bind_ollama(OllamaProvider(model="llama3.2"), [
+            _FakeOllamaResponse(lines=lines),
+        ])
+
+        async def drain():
+            return [event async for event in provider.stream([], [], "sys")]
+
+        events = asyncio.run(drain())
+        assert client.requests[0]["json"]["stream"] is True
+        assert [e.type for e in events] == [
+            "thinking_delta", "thinking_delta", "text_delta", "text_delta", "done",
+        ]
+        done = events[-1].response
+        assert done is not None
+        assert done.content[0].text == "Hi there"
+        assert done.thinking is not None
+        assert done.thinking.thinking == "hmm ok"
+        assert done.usage.input_tokens == 5
+        assert done.usage.output_tokens == 3
+
+    def test_stream_native_tool_calls(self):
+        import asyncio
+        import json
+
+        from open_claude_code.providers.ollama import OllamaProvider
+
+        tools = [{"name": "echo", "description": "Echo", "input_schema": {"type": "object"}}]
+        lines = [
+            json.dumps({
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "function": {"name": "echo", "arguments": {"message": "hi"}},
+                    }],
+                },
+                "done": False,
+            }),
+            json.dumps({"message": {"role": "assistant", "content": ""}, "done": True, "done_reason": "stop"}),
+        ]
+        provider, _client = _bind_ollama(OllamaProvider(model="llama3.2"), [
+            _FakeOllamaResponse(lines=lines),
+        ])
+
+        async def drain():
+            return [event async for event in provider.stream([], tools, "sys")]
+
+        events = asyncio.run(drain())
+        types = [e.type for e in events]
+        assert "tool_use_start" in types
+        assert "tool_use_end" in types
+        assert events[-1].type == "done"
+        block = events[-1].response.content[0]
+        assert block.name == "echo"
+        assert block.input == {"message": "hi"}
+
+    def test_model_not_found_is_clear(self):
+        import asyncio
+
+        import pytest
+
+        from open_claude_code.providers.base import ProviderError
+        from open_claude_code.providers.ollama import OllamaProvider
+
+        provider, _client = _bind_ollama(OllamaProvider(model="missing"), [
+            _FakeOllamaResponse(status_code=404, json_body={"error": "model 'missing' not found"}),
+        ])
+        with pytest.raises(ProviderError, match="ollama pull missing") as exc:
+            asyncio.run(provider.send([], [], "sys"))
+        assert exc.value.status_code == 404
+        assert not exc.value.transient
+
+    def test_connect_error_mentions_serve(self):
+        import asyncio
+
+        import httpx
+        import pytest
+
+        from open_claude_code.providers.base import ProviderError
+        from open_claude_code.providers.ollama import OllamaProvider
+
+        class _Boom:
+            is_closed = False
+
+            async def post(self, url, json=None):
+                raise httpx.ConnectError("refused")
+
+        provider = OllamaProvider(model="llama3.2")
+        provider._client = _Boom()
+        with pytest.raises(ProviderError, match="ollama serve"):
+            asyncio.run(provider.send([], [], "sys"))
+
+    def test_long_history_is_not_truncated(self):
+        from open_claude_code.providers.ollama import OllamaProvider
+
+        history = [{"role": "user", "content": f"turn {i}"} for i in range(40)]
+        p = OllamaProvider(model="llama3.2")
+        payload = p._payload(history, [], "sys", stream=True)
+        user_msgs = [m for m in payload["messages"] if m["role"] == "user"]
+        assert len(user_msgs) == 40
+        assert user_msgs[-1]["content"] == "turn 39"

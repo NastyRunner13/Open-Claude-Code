@@ -192,11 +192,11 @@ class TestApplyTextToolRecovery:
 
 
 def _start_xml_tool_server():
-    """OpenAI-compat mock: first turn is Qwen XML, second turn is prose."""
+    """Native Ollama `/api/chat` mock: first turn is Qwen XML, second is prose."""
     import json
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-    state = {"calls": 0, "saw_tool_result": False}
+    state = {"calls": 0, "saw_tool_result": False, "requests": []}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):
@@ -205,6 +205,7 @@ def _start_xml_tool_server():
         def do_POST(self):
             length = int(self.headers.get("Content-Length", "0"))
             body = json.loads(self.rfile.read(length) or b"{}")
+            state["requests"].append({"path": self.path, "body": body})
             messages = body.get("messages") or []
             saw_tool = any(m.get("role") == "tool" for m in messages)
             state["calls"] += 1
@@ -217,40 +218,34 @@ def _start_xml_tool_server():
                     '<tool_call>{"name": "read_file", '
                     '"arguments": {"file_path": "marker.txt"}}</tool_call>'
                 )
-            if body.get("stream"):
-                self.send_response(200)
-                self.send_header("Content-Type", "text/event-stream")
-                self.end_headers()
-                chunk = {
-                    "id": "chatcmpl-1",
-                    "object": "chat.completion.chunk",
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            if body.get("stream", True):
+                self.wfile.write(json.dumps({
                     "model": "qwen2.5-coder",
-                    "choices": [{
-                        "index": 0,
-                        "delta": {"role": "assistant", "content": text},
-                        "finish_reason": "stop",
-                    }],
-                }
-                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
-                self.wfile.write(b"data: [DONE]\n\n")
+                    "message": {"role": "assistant", "content": text},
+                    "done": False,
+                }).encode() + b"\n")
+                self.wfile.write(json.dumps({
+                    "model": "qwen2.5-coder",
+                    "message": {"role": "assistant", "content": ""},
+                    "done": True,
+                    "done_reason": "stop",
+                    "prompt_eval_count": 8,
+                    "eval_count": 12,
+                    "total_duration": 1_000_000_000,
+                }).encode() + b"\n")
                 return
             payload = {
-                "id": "chatcmpl-1",
-                "object": "chat.completion",
                 "model": "qwen2.5-coder",
-                "choices": [{
-                    "index": 0,
-                    "message": {"role": "assistant", "content": text},
-                    "finish_reason": "stop",
-                }],
-                "usage": {"prompt_tokens": 8, "completion_tokens": 12, "total_tokens": 20},
+                "message": {"role": "assistant", "content": text},
+                "done": True,
+                "done_reason": "stop",
+                "prompt_eval_count": 8,
+                "eval_count": 12,
             }
-            raw = json.dumps(payload).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(raw)))
-            self.end_headers()
-            self.wfile.write(raw)
+            self.wfile.write(json.dumps(payload).encode())
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -300,6 +295,12 @@ class TestOccExecRecoversXmlToolCall:
         assert "<tool_call>" not in final
         assert state["saw_tool_result"] is True
         assert state["calls"] >= 2
+        assert state["requests"], "agent never hit the native chat endpoint"
+        assert all(item["path"] == "/api/chat" for item in state["requests"])
+        first = state["requests"][0]["body"]
+        assert first["model"] == "qwen2.5-coder"
+        assert first["options"]["num_ctx"] == 32768
+        assert first["stream"] is True
         events = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
         assert any(e.get("type") == "final" for e in events)
 

@@ -104,6 +104,12 @@ class TestParseConfig:
         config = _parse_config(path)
         assert config.base_url is None
 
+    def test_parses_num_ctx(self, tmp_path):
+        path = tmp_path / "occ.yml"
+        path.write_text("model: ollama/llama3.2\nnum_ctx: 8192\n")
+        config = _parse_config(path)
+        assert config.num_ctx == 8192
+
     def test_parses_budget_and_custom_prices(self, tmp_path):
         path = tmp_path / "occ.yml"
         path.write_text(

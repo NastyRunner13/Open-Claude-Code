@@ -201,6 +201,14 @@ def test_max_budget_cli_overrides_config(monkeypatch):
     assert config.max_budget_usd == 2.5
 
 
+def test_ollama_num_ctx_env_overrides_config(monkeypatch):
+    monkeypatch.setenv("OCC_OLLAMA_NUM_CTX", "8192")
+    monkeypatch.setattr(sys, "argv", ["occ", "--model", "ollama/llama3.2"])
+    args = parse_args()
+    config = resolve_config(args)
+    assert config.num_ctx == 8192
+
+
 @pytest.mark.asyncio
 async def test_cost_slash_command_is_handled():
     config, agent, mgr = _slash_env()
