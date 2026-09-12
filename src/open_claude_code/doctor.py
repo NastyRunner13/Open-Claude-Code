@@ -18,6 +18,7 @@ from typing import Callable, Mapping
 
 from open_claude_code import __version__
 from open_claude_code.config import AgentConfig, find_config_path
+from open_claude_code.providers.ollama import DEFAULT_BASE_URL, normalize_ollama_url
 from open_claude_code.providers.registry import resolve_provider
 
 KEY_ENV_VARS: tuple[tuple[str, str], ...] = (
@@ -42,7 +43,7 @@ _PLACEHOLDER_VALUES = frozenset({
     "changeme", "placeholder", "example", "xxx", "todo", "none", "null",
     "your-api-key", "your_api_key", "api-key-here", "sk-...",
 })
-DEFAULT_OLLAMA_URL = "http://localhost:11434"
+DEFAULT_OLLAMA_URL = DEFAULT_BASE_URL
 
 
 @dataclass
@@ -90,20 +91,22 @@ def _env_value(environ: Mapping[str, str], name: str) -> str:
     return str(environ.get(name, "") or "")
 
 
-def _ollama_base_url(config: AgentConfig, provider: str) -> str:
+def _ollama_base_url(
+    config: AgentConfig,
+    provider: str,
+    environ: Mapping[str, str] | None = None,
+) -> str:
     if provider == "ollama" and config.base_url:
-        url = config.base_url.rstrip("/")
-        if url.endswith("/v1"):
-            url = url[:-3]
-        return url
-    return DEFAULT_OLLAMA_URL
+        return normalize_ollama_url(config.base_url)
+    if environ is not None:
+        host = str(environ.get("OLLAMA_HOST") or "").strip()
+        return normalize_ollama_url(host or DEFAULT_OLLAMA_URL)
+    return normalize_ollama_url(None)
 
 
 def probe_ollama(base_url: str = DEFAULT_OLLAMA_URL, timeout: float = 1.5) -> tuple[bool, str]:
     """Hit Ollama's native `/api/version`, then the OpenAI `/v1/models` shim."""
-    url = base_url.rstrip("/")
-    if url.endswith("/v1"):
-        url = url[:-3]
+    url = normalize_ollama_url(base_url)
     try:
         import httpx
     except ImportError:
@@ -246,7 +249,7 @@ def collect_doctor_report(
                 )
             )
 
-    ollama_url = _ollama_base_url(config, provider)
+    ollama_url = _ollama_base_url(config, provider, environ)
     probe = ollama_probe or probe_ollama
     ollama_ok, ollama_detail = probe(ollama_url)
     ollama_required = provider == "ollama"

@@ -27,6 +27,9 @@ class AgentConfig:
     # Provider settings
     api_key: str | None = None
     base_url: str | None = None
+    # Ollama native context window. None means provider default (32768) or
+    # OCC_OLLAMA_NUM_CTX. Ignored by other providers.
+    num_ctx: int | None = None
 
     # Tools that auto-approve (no user prompt)
     auto_approve: list[str] = field(default_factory=lambda: [
@@ -180,6 +183,8 @@ def _parse_config(path: Path) -> AgentConfig:
         config.model = raw["model"]
     if "base_url" in raw:
         config.base_url = raw["base_url"]
+    if "num_ctx" in raw and raw["num_ctx"] is not None:
+        config.num_ctx = int(raw["num_ctx"])
     if "max_tokens" in raw:
         config.max_tokens = raw["max_tokens"]
     if "max_tool_output" in raw:

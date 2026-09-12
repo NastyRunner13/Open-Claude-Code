@@ -289,6 +289,7 @@ class SubagentManager:
                 api_key=sub_config.api_key,
                 base_url=sub_config.base_url,
                 prompt_caching=sub_config.prompt_caching,
+                num_ctx=sub_config.num_ctx,
             )
         else:
             sub_config.model = model

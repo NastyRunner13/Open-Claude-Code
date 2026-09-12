@@ -5,7 +5,7 @@ Resolves model strings to the correct provider:
   gpt-* / o1-* / o3-* → OpenAIProvider
   gemini-*     → GeminiProvider
   groq/*       → GroqProvider (prefix required; llama-* is not Groq)
-  ollama/*     → OllamaProvider
+  ollama/*     → OllamaProvider (native /api/chat)
   openrouter/* → OpenRouterProvider
   vendor/model + OPENROUTER_API_KEY → OpenRouterProvider
   base_url     → OpenAIProvider (custom endpoint)
@@ -51,6 +51,7 @@ def create_provider(
     api_key: str | None = None,
     base_url: str | None = None,
     prompt_caching: bool = True,
+    num_ctx: int | None = None,
 ) -> Provider:
     """Create the appropriate provider based on model name.
 
@@ -70,7 +71,9 @@ def create_provider(
 
     if kind == "ollama":
         from .ollama import OllamaProvider
-        return OllamaProvider(model=model, max_tokens=max_tokens, base_url=base_url)
+        return OllamaProvider(
+            model=model, max_tokens=max_tokens, base_url=base_url, num_ctx=num_ctx,
+        )
 
     if kind == "openrouter":
         from .openrouter import OpenRouterProvider

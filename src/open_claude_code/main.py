@@ -168,6 +168,13 @@ def resolve_config(args: argparse.Namespace) -> AgentConfig:
     if args.base_url:
         config.base_url = args.base_url
 
+    env_ctx = os.environ.get("OCC_OLLAMA_NUM_CTX", "").strip()
+    if env_ctx:
+        try:
+            config.num_ctx = int(env_ctx)
+        except ValueError:
+            pass
+
     if args.ephemeral:
         config.persist_sessions = False
         config.persist_snapshots = False
@@ -680,6 +687,7 @@ async def run() -> None:
         api_key=config.api_key,
         base_url=config.base_url,
         prompt_caching=config.prompt_caching,
+        num_ctx=config.num_ctx,
     )
 
     # Set up event bus and listeners. Exec is non-interactive: privileged
