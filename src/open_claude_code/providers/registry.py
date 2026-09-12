@@ -4,7 +4,7 @@ Resolves model strings to the correct provider:
   claude-*     → AnthropicProvider
   gpt-* / o1-* / o3-* → OpenAIProvider
   gemini-*     → GeminiProvider
-  groq/*       → GroqProvider
+  groq/*       → GroqProvider (prefix required; llama-* is not Groq)
   ollama/*     → OllamaProvider
   openrouter/* → OpenRouterProvider
   vendor/model + OPENROUTER_API_KEY → OpenRouterProvider
@@ -29,6 +29,8 @@ def create_provider(
 
     Auto-detects the provider from the model string.
     Supports explicit prefixes: groq/, ollama/, openrouter/.
+    Groq is prefix-only: unprefixed llama- / mixtral- / gemma- / deepseek-
+    names are not stolen when GROQ_API_KEY is set.
     Falls back to OpenAI-compatible if a base_url is given.
     Vendor/model slugs route to OpenRouter when OPENROUTER_API_KEY is set.
     Falls back to Anthropic otherwise.
@@ -70,14 +72,6 @@ def create_provider(
     if model_lower.startswith("gemini"):
         from .gemini import GeminiProvider
         return GeminiProvider(model=model, max_tokens=max_tokens, api_key=api_key)
-
-    # Groq model names (without prefix)
-    groq_models = ("llama-", "mixtral-", "gemma-", "deepseek-")
-    if any(model_lower.startswith(p) for p in groq_models):
-        # Check if GROQ_API_KEY is set — if so, assume Groq
-        if os.environ.get("GROQ_API_KEY"):
-            from .groq import GroqProvider
-            return GroqProvider(model=model, max_tokens=max_tokens, api_key=api_key)
 
     # vendor/model slugs (Together, Fireworks, xAI, OpenRouter catalog ids)
     if "/" in model_lower and os.environ.get("OPENROUTER_API_KEY"):

@@ -1,7 +1,8 @@
 """Groq provider — fast inference via Groq cloud.
 
-Groq uses the OpenAI-compatible API format, so this is a thin wrapper
-around the OpenAI provider with Groq-specific defaults.
+Thin OpenAI-compat wrapper. OCC model ids use the `groq/` prefix
+(`groq/llama-3.3-70b-versatile`). Unprefixed llama-/deepseek- names
+are not routed here — see the registry.
 """
 
 from __future__ import annotations
