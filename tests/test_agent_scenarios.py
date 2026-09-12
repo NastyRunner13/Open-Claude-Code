@@ -69,6 +69,32 @@ def test_scripted_text_emits_usage_and_stream_deltas():
     assert provider.remaining == 0
 
 
+def test_xml_tool_call_from_openai_compat_is_executed():
+    """Local models that narrate <tool_call> JSON still run the tool."""
+    from open_claude_code.providers.openai import OpenAIProvider
+
+    from tests.test_providers import _FakeStream, _bind_create, _completion, _delta_chunk
+
+    tools, calls = _echo_tools()
+    xml = '<tool_call>{"name": "echo", "arguments": {"message": "ping"}}</tool_call>'
+    turn = {"n": 0}
+
+    async def create(**kwargs):
+        turn["n"] += 1
+        if turn["n"] == 1:
+            if kwargs.get("stream"):
+                return _FakeStream([_delta_chunk(xml, finish="stop")])
+            return _completion(xml)
+        if kwargs.get("stream"):
+            return _FakeStream([_delta_chunk("done", finish="stop")])
+        return _completion("done")
+
+    provider = _bind_create(OpenAIProvider(model="qwen2.5", api_key="test"), create)
+    agent = Agent(provider=provider, event_bus=EventBus(), tools=tools, config=_config())
+    assert asyncio.run(agent.run("echo ping")) == "done"
+    assert calls == ["ping"]
+
+
 def test_scripted_tool_then_final_text():
     tools, calls = _echo_tools()
     provider = ScriptedProvider([
