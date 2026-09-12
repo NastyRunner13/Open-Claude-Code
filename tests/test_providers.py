@@ -5,7 +5,7 @@ import os
 import pytest
 
 from open_claude_code.providers.base import Provider, ProviderResponse, TextBlock
-from open_claude_code.providers.registry import create_provider
+from open_claude_code.providers.registry import create_provider, resolve_provider
 
 
 class TestRegistryAutoDetection:
@@ -140,6 +140,16 @@ class TestRegistryAutoDetection:
         monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
         with pytest.raises(ProviderError, match="OPENROUTER_API_KEY"):
             create_provider("openrouter/anthropic/claude-sonnet-4")
+
+    def test_resolve_provider_matches_create_without_instantiation(self, monkeypatch):
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        assert resolve_provider("openrouter/anthropic/claude-sonnet-4") == "openrouter"
+        assert resolve_provider("groq/llama-3.3-70b-versatile") == "groq"
+        assert resolve_provider("ollama/llama3.2") == "ollama"
+        assert resolve_provider("gpt-4o") == "openai"
+        assert resolve_provider("claude-sonnet-4") == "anthropic"
+        assert resolve_provider("llama-3.3-70b-versatile") == "anthropic"
+        assert resolve_provider("custom", base_url="http://localhost:8000/v1") == "openai-compat"
 
 
 class TestProviderModelName:

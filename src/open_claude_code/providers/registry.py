@@ -15,7 +15,34 @@ from __future__ import annotations
 
 import os
 
-from .base import Provider, ProviderError
+from .base import Provider
+
+
+def resolve_provider(model: str, base_url: str | None = None) -> str:
+    """Return the provider id a model string maps to, without constructing a client.
+
+    Same routing as create_provider(): prefixes, then base_url, then name
+    heuristics. Groq is prefix-only. Vendor/model slugs go to OpenRouter only
+    when OPENROUTER_API_KEY is set. Unknown names default to Anthropic.
+    """
+    model_lower = model.lower()
+    if model_lower.startswith("groq/"):
+        return "groq"
+    if model_lower.startswith("ollama/"):
+        return "ollama"
+    if model_lower.startswith("openrouter/"):
+        return "openrouter"
+    if base_url:
+        return "openai-compat"
+    if model_lower.startswith("claude"):
+        return "anthropic"
+    if any(model_lower.startswith(p) for p in ("gpt-", "o1-", "o3-", "o4-", "chatgpt-")):
+        return "openai"
+    if model_lower.startswith("gemini"):
+        return "gemini"
+    if "/" in model_lower and os.environ.get("OPENROUTER_API_KEY"):
+        return "openrouter"
+    return "anthropic"
 
 
 def create_provider(
@@ -35,50 +62,34 @@ def create_provider(
     Vendor/model slugs route to OpenRouter when OPENROUTER_API_KEY is set.
     Falls back to Anthropic otherwise.
     """
-    model_lower = model.lower()
+    kind = resolve_provider(model, base_url)
 
-    # Explicit provider prefixes
-    if model_lower.startswith("groq/"):
+    if kind == "groq":
         from .groq import GroqProvider
         return GroqProvider(model=model, max_tokens=max_tokens, api_key=api_key)
 
-    if model_lower.startswith("ollama/"):
+    if kind == "ollama":
         from .ollama import OllamaProvider
         return OllamaProvider(model=model, max_tokens=max_tokens, base_url=base_url)
 
-    if model_lower.startswith("openrouter/"):
+    if kind == "openrouter":
         from .openrouter import OpenRouterProvider
         return OpenRouterProvider(model=model, max_tokens=max_tokens, api_key=api_key)
 
-    # Custom endpoint → OpenAI-compatible
-    if base_url:
+    if kind == "openai-compat":
         from .openai import OpenAIProvider
         return OpenAIProvider(
             model=model, max_tokens=max_tokens, api_key=api_key, base_url=base_url,
         )
 
-    # Model name prefix detection
-    if model_lower.startswith("claude"):
-        from .anthropic import AnthropicProvider
-        return AnthropicProvider(
-            model=model, max_tokens=max_tokens, api_key=api_key,
-            prompt_caching=prompt_caching,
-        )
-
-    if any(model_lower.startswith(p) for p in ("gpt-", "o1-", "o3-", "o4-", "chatgpt-")):
+    if kind == "openai":
         from .openai import OpenAIProvider
         return OpenAIProvider(model=model, max_tokens=max_tokens, api_key=api_key)
 
-    if model_lower.startswith("gemini"):
+    if kind == "gemini":
         from .gemini import GeminiProvider
         return GeminiProvider(model=model, max_tokens=max_tokens, api_key=api_key)
 
-    # vendor/model slugs (Together, Fireworks, xAI, OpenRouter catalog ids)
-    if "/" in model_lower and os.environ.get("OPENROUTER_API_KEY"):
-        from .openrouter import OpenRouterProvider
-        return OpenRouterProvider(model=model, max_tokens=max_tokens, api_key=api_key)
-
-    # Default → Anthropic
     from .anthropic import AnthropicProvider
     return AnthropicProvider(
         model=model, max_tokens=max_tokens, api_key=api_key,

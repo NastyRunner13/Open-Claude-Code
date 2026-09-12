@@ -14,7 +14,7 @@ from .base import (
     ThinkingBlock,
     ToolUseBlock,
 )
-from .registry import create_provider
+from .registry import create_provider, resolve_provider
 
 __all__ = [
     "AnthropicProvider",
@@ -30,4 +30,5 @@ __all__ = [
     "ThinkingBlock",
     "ToolUseBlock",
     "create_provider",
+    "resolve_provider",
 ]
