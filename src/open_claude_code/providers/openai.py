@@ -19,6 +19,7 @@ from .base import (
     ThinkingBlock,
     ToolUseBlock,
 )
+from .tool_calls import apply_text_tool_recovery
 
 
 def _anthropic_tools_to_openai(tools: list[dict]) -> list[dict]:
@@ -286,6 +287,8 @@ class OpenAIProvider(Provider):
                     input=args,
                 ))
 
+        content = apply_text_tool_recovery(content, tools)
+
         usage = getattr(response, "usage", None)
         return ProviderResponse(
             thinking=thinking,
@@ -383,6 +386,7 @@ class OpenAIProvider(Provider):
         if full_text:
             content.append(TextBlock(text=full_text))
 
+        structured_ids: set[str] = set()
         for tc_data in tool_calls_acc.values():
             try:
                 args = json.loads(tc_data["arguments"]) if tc_data["arguments"] else {}
@@ -394,12 +398,28 @@ class OpenAIProvider(Provider):
                 name=tc_data["name"],
                 input=args,
             ))
+            structured_ids.add(tc_data["id"])
             yield StreamEvent(
                 type="tool_use_end",
                 tool_name=tc_data["name"],
                 tool_id=tc_data["id"],
                 tool_input=args,
             )
+
+        content = apply_text_tool_recovery(content, tools)
+        for block in content:
+            if isinstance(block, ToolUseBlock) and block.id not in structured_ids:
+                yield StreamEvent(
+                    type="tool_use_start",
+                    tool_name=block.name,
+                    tool_id=block.id,
+                )
+                yield StreamEvent(
+                    type="tool_use_end",
+                    tool_name=block.name,
+                    tool_id=block.id,
+                    tool_input=block.input,
+                )
 
         yield StreamEvent(
             type="done",
