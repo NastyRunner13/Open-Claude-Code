@@ -4,6 +4,7 @@
 # Model (default: claude-sonnet-4-20250514)
 model: "claude-sonnet-4-20250514"
 # model: "openrouter/anthropic/claude-sonnet-4"  # OPENROUTER_API_KEY
+# model: "groq/llama-3.3-70b-versatile"          # GROQ_API_KEY; groq/ prefix required
 max_tokens: 16000
 max_tool_output: 10000
 

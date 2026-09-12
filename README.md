@@ -101,8 +101,10 @@ occ --model gpt-4o
 # Google Gemini
 occ --model gemini-2.0-flash
 
-# Groq (blazing fast inference)
+# Groq (prefix required — unprefixed llama-/deepseek- is not Groq)
 occ --model groq/llama-3.3-70b-versatile
+occ --model groq/llama-3.1-8b-instant
+occ --model groq/openai/gpt-oss-120b
 
 # OpenRouter (any catalog model; strips the openrouter/ prefix)
 occ --model openrouter/anthropic/claude-sonnet-4
@@ -121,11 +123,15 @@ occ --model my-model --base-url https://api.together.xyz/v1
 | `claude-*` | Anthropic | `ANTHROPIC_API_KEY` |
 | `gpt-*`, `o1-*`, `o3-*`, `o4-*` | OpenAI | `OPENAI_API_KEY` |
 | `gemini-*` | Google Gemini | `GEMINI_API_KEY` |
-| `groq/*` | Groq | `GROQ_API_KEY` |
+| `groq/*` | Groq (prefix required) | `GROQ_API_KEY` |
 | `openrouter/*` | OpenRouter | `OPENROUTER_API_KEY` |
 | `vendor/model` with `OPENROUTER_API_KEY` set | OpenRouter | `OPENROUTER_API_KEY` |
 | `ollama/*` | Ollama (local) | — |
 | `--base-url` / YAML `base_url` | OpenAI-compatible | `OPENAI_API_KEY` |
+
+Groq model ids change; the `groq/` prefix does not. Current production examples:
+`llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `openai/gpt-oss-120b`,
+`openai/gpt-oss-20b`. Pass them as `groq/<id>`.
 
 ---
 

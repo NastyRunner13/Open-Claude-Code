@@ -25,9 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `workspace-write` denies unknown shell commands, not only a few destructive regexes. Timeouts kill the process group.
 - Unbound filesystem/shell/web tools fail closed instead of skipping policy.
 - Streaming UI no longer reprints the answer in a panel after live tokens. `AgentStart` starts the thinking spinner.
+- OpenAI-compatible hosts that reject `max_completion_tokens` are retried with `max_tokens` (remembered for the rest of the session).
+- Stream `include_usage` is dropped and retried when the host 400s on `stream_options`.
+- Groq/compat models that reject tools raise a clear `ProviderError` instead of a generic OpenAI exception.
+- OpenAI-compat stream 429/5xx errors are marked transient so the agent retry loop can fire.
 
 ### Changed
 
+- Groq routing requires the `groq/` prefix. Unprefixed `llama-*` / `mixtral-*` / `gemma-*` / `deepseek-*` are no longer stolen when `GROQ_API_KEY` is set.
 - `sandbox` schema no longer claims filesystem or network isolation.
 - Built-in tool count documented as 25 (including git, patch, multi-edit, undo, and sub-agent coordination).
 - Default `auto_approve` includes read-only git tools and `load_skill`.
