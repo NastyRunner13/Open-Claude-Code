@@ -111,6 +111,7 @@ occ --model openrouter/anthropic/claude-sonnet-4
 
 # Local models via Ollama
 occ --model ollama/llama3.2
+occ --model ollama/qwen2.5-coder
 
 # Any OpenAI-compatible endpoint (Together, vLLM, etc.)
 occ --model my-model --base-url https://api.together.xyz/v1
@@ -132,6 +133,11 @@ occ --model my-model --base-url https://api.together.xyz/v1
 Groq model ids change; the `groq/` prefix does not. Current production examples:
 `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `openai/gpt-oss-120b`,
 `openai/gpt-oss-20b`. Pass them as `groq/<id>`.
+
+Local and OpenAI-compatible models often emit tool calls as XML or text
+instead of filling `tool_calls`. OCC recovers Qwen `<tool_call>` JSON, GLM
+`<arg_key>`/`<arg_value>`, Qwen3 `<function=…>`, and similar templates on
+that path. Structured `tool_calls` still win when the host fills them.
 
 ---
 
@@ -590,6 +596,7 @@ Here are features and improvements planned for future releases:
 - [x] **Multi-agent orchestration** — built-in explore/plan/GP children, background wait, worktrees, resume, steer, and `run_workflow` phase barriers
 - [x] **Diff-based editing** — `apply_patch` applies unified diffs atomically
 - [x] **Cost tracking** — `/cost` from real usage, price table, `max_budget_usd`, `occ doctor`
+- [x] **Local tool-call recovery** — Qwen/GLM/XML/text function calls on OpenAI-compat hosts
 
 See the [improvement analysis](https://github.com/NastyRunner13/Open-Claude-Code/blob/main/IMPROVEMENTS.md) for a detailed comparison with Claude Code and other agents.
 
