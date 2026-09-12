@@ -95,6 +95,16 @@ personas_dirs:
   - ".occ/personas"
   - "~/.occ/personas"
 
+# Cost. Prices are USD per million tokens. `/cost` prints "price unknown"
+# for unlisted hosted models instead of $0.00. Ollama is free.
+# max_budget_usd: 5.0
+# model_prices:
+#   my-local-model:
+#     input: 0.0
+#     output: 0.0
+#     cache_read: 0.0
+#     cache_creation: 0.0
+
 # Trusted project-local lifecycle hooks. Commands receive OCC_TOOL_NAME,
 # OCC_FILE_PATH, OCC_COMMAND, and/or OCC_RESPONSE environment variables.
 # hooks:

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `occ doctor` prints which API keys are set (never values), which provider the model string maps to, whether Ollama answers, and whether `rg` is on PATH. `--json` emits a persistable CI report; `--report PATH` writes it. Exit code 1 if an error-severity check fails.
+- `/cost` shows per-model input/output/cache tokens, USD (or `price unknown`), API vs wall duration, and lines added/removed. Optional `max_budget_usd` / `--max-budget` stops the loop. Custom YAML `model_prices` override the built-in table. Totals restore on `--resume`.
 - Sub-agent runtime: built-in `explore` / `plan` / `general-purpose` roles, background spawn + `wait_agent`, `kill_agent`, `send_agent_message` (steer/queue), `resume_from`, `isolation=worktree` with `apply_agent_worktree`, personas from `.occ/personas`, and `run_workflow` phase barriers. Children get their own planning store. Nested spawn stays denied.
 - First-class OpenRouter provider: `openrouter/<vendor>/<model>` (and `vendor/model` when `OPENROUTER_API_KEY` is set). Sends OpenRouter attribution headers. Missing key raises `ProviderError`.
 - YAML `base_url` is parsed so OpenAI-compatible endpoints can live in `occ.yml`.

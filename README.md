@@ -418,6 +418,14 @@ auto_approve:                 # Tools that skip the approval prompt
 # Prompt caching (Anthropic only — up to 90% cost reduction)
 prompt_caching: true
 
+# Cost. Prices are USD per million tokens. Unknown models print
+# "price unknown" instead of $0.00. Ollama is treated as free.
+# max_budget_usd: 5.0
+# model_prices:
+#   my-local-model:
+#     input: 0.0
+#     output: 0.0
+
 # Context management
 max_context_tokens: 100000
 context_compaction: true
@@ -473,6 +481,10 @@ occ --api-key sk-...           # Pass API key directly
 occ --base-url https://...    # Custom endpoint
 occ --config ./my-config.yml  # Custom config path
 occ --resume 20260712T...     # Resume a durable local session
+occ --max-budget 5            # Stop when known session cost reaches $5
+occ doctor                    # Keys, provider mapping, Ollama, ripgrep
+occ doctor --json             # Same report as JSON for CI
+occ doctor --report out.json  # Persist the JSON report
 ```
 
 ---
@@ -495,6 +507,7 @@ Inside the interactive REPL:
 | `/memory reload` | Rescan and reload memory files |
 | `/memory show` | Preview loaded memory content |
 | `/status` | Show model, permissions, context, and session details |
+| `/cost` | Show token usage, USD (or `price unknown`), API duration, and lines changed |
 | `/sessions` | List durable local sessions |
 | `/changes` | Show current Git status and uncommitted diff |
 | `/undo <file>` | Restore the latest OCC file snapshot |
@@ -576,7 +589,7 @@ Here are features and improvements planned for future releases:
 - [x] **Session export** — export conversation history to a JSON task capsule (`/export`)
 - [x] **Multi-agent orchestration** — built-in explore/plan/GP children, background wait, worktrees, resume, steer, and `run_workflow` phase barriers
 - [x] **Diff-based editing** — `apply_patch` applies unified diffs atomically
-- [ ] **Cost tracking** — real-time token usage and spending dashboard (`/cost`)
+- [x] **Cost tracking** — `/cost` from real usage, price table, `max_budget_usd`, `occ doctor`
 
 See the [improvement analysis](https://github.com/NastyRunner13/Open-Claude-Code/blob/main/IMPROVEMENTS.md) for a detailed comparison with Claude Code and other agents.
 

@@ -50,7 +50,7 @@ and Ollama native path belong here, not in a later "parity" wave.
 | Shell | Partial | `workspace-write` denies unknown and destructive. Process-group kill on timeout. No background, no output stream. |
 | Web | Partial | Public-IP check and redirect revalidation exist. DNS is not pinned. Search ignores domain policy. |
 | `sandbox` tool | Partial | Schema and README no longer claim a jail. Still a subprocess with timeout only. |
-| Providers | Partial | Anthropic, OpenAI-compat, Gemini, Groq, Ollama, OpenRouter. YAML parses `base_url`. Groq is `groq/` prefix-only. Compat hosts fall back `max_tokens` / drop `include_usage` on 400. No `/provider`, no `occ doctor`. Ollama uses the OpenAI shim. |
+| Providers | Partial | Anthropic, OpenAI-compat, Gemini, Groq, Ollama, OpenRouter. YAML parses `base_url`. Groq is `groq/` prefix-only. Compat hosts fall back `max_tokens` / drop `include_usage` on 400. `occ doctor` reports keys and routing. No `/provider`. Ollama uses the OpenAI shim. |
 | MCP | Partial | Stdio tools are callable. Env is merged with `os.environ`. JSON-RPC/`isError` fail. No HTTP, resources, prompts, OAuth. |
 | Plugins | Partial | Lifecycle hooks load at startup. No tools, slash commands, isolation, or packaging. |
 | Skills | Implemented | Catalog then on-demand load. `allowed_tools` and `scripts/` are unused. No `/<skill-name>` slash. |
@@ -61,7 +61,7 @@ and Ollama native path belong here, not in a later "parity" wave.
 | Memory files | Partial | Loads `AGENTS.md` / `CLAUDE.md` from configured dirs only. No parent walk, no write-back. |
 | Planning checklist | Partial | In-memory `write_plan` / `update_plan` / `read_plan`. Lost on resume. |
 | Git | Partial | Read-only status/diff/log/branch. `git_branch` argv is wrong. No commit/PR/review. |
-| Cost / usage UI | Missing | `UsageUpdated` is emitted from stream `done`. No `/cost`. |
+| Cost / usage UI | Implemented | `/cost` from real usage, price table, `max_budget_usd`. Unknown models print `price unknown`. `occ doctor` JSON for CI. |
 | Docs vs code | Implemented | README, CHANGELOG, schemas, and MCP docstring match the Wave 1 code. |
 
 ---
@@ -135,8 +135,8 @@ Content-Length / NDJSON remains Wave 3.
 ## Wave 2. Providers: OpenRouter, Groq, and the ones we already have
 
 Groq already exists as a thin OpenAI-compat wrapper. OpenRouter is a first-class
-wrapper of `OpenAIProvider`. Remaining Wave 2 work is Groq hardening, usage on
-every path, `occ doctor`, and `/cost`.
+wrapper of `OpenAIProvider`. Remaining Wave 2 work is Ollama native +
+`num_ctx`, XML/text tool-call recovery, and `/provider`.
 
 Do not add a sixth SDK. Keep wrapping `OpenAIProvider` for OpenAI-compat
 hosts. Put provider-specific auth, headers, and model-id rules in small
@@ -177,8 +177,9 @@ wrappers and in the registry.
    `max_tokens` on 400, and remembers which one the host accepted.
 7. Anthropic enables extended thinking for every model whose name contains
    `"claude"`. Haiku and older snapshots 400.
-8. No `list_models()`. No `occ doctor`. No `/provider` wizard. First run is
-   still "export a key and hope the model string maps."
+8. **Done (`occ doctor`).** Remaining: no `list_models()`, no `/provider`
+   wizard. First run is still "export a key and hope the model string maps"
+   unless you run `occ doctor` first.
 9. `ProviderStreamEvent` is a second stream vocabulary no provider emits.
 10. Ollama goes through the OpenAI-compat shim at `localhost:11434/v1`.
     OpenClaude dropped that path because Ollama's shim silently truncates
@@ -232,6 +233,9 @@ Keep the wrapper. Then:
 
 ### Shared provider work in the same wave
 
+- **Done (`/cost`).** Usage events drive `/cost` and `max_budget_usd`.
+  Anthropic stream `done` can still ship empty usage on some paths; `/cost`
+  then shows zeros for that request rather than inventing dollars.
 - Fill usage on every `done` / `message_complete` (Anthropic final message
   still empty; OpenAI `include_usage` with 400 fallback is done).
 - Stop forcing Anthropic thinking on every `claude*` name. Gate on a
@@ -239,9 +243,9 @@ Keep the wrapper. Then:
 - Unify on `StreamEvent`. Delete or actually emit `ProviderStreamEvent`.
 - Narrow `_stream_response`'s `except Exception: send()` so programmer
   errors are not swallowed.
-- `occ doctor`: which keys are set, which provider the model string maps
-  to, Ollama reachable, `rg` present. OpenClaude's `doctor:runtime` also
-  emits JSON and a persistable report. Match that shape so CI can consume it.
+- **Done.** `occ doctor`: which keys are set, which provider the model
+  string maps to, Ollama reachable, `rg` present. `--json` and `--report`
+  emit a persistable `{ok, checks[]}` report for CI.
 - `/provider` wizard that writes a user-level profile (`~/.occ/profiles.yml`
   or similar), not a session snapshot. Keys stay out of the JSONL ledger.
   Switching providers mid-session must not rewrite `occ.yml` in the project
@@ -776,7 +780,7 @@ Small, reviewable, in this order. One concern each.
 | 10 | Shell: deny `unknown` in `workspace-write`, process-group kill, command in approval prompt. | 1 (done) |
 | 11 | First-class OpenRouter provider + YAML `base_url`. | 2 (done) |
 | 12 | Groq heuristic removal, `include_usage`, max_tokens fallback. | 2 (done) |
-| 13 | `occ doctor` + `/cost` from real usage. | 2 |
+| 13 | `occ doctor` + `/cost` from real usage. | 2 (done) |
 | 14 | Skills: enforce `allowed_tools`, expose scripts, fix `list_skills` lie. | 3 |
 | 15 | Subagent isolation (own middleware), built-in explore/plan roles. | 3 (done) |
 | 16 | Session: no per-token ledger, persist plan, `/clear` is real. | 3 |
@@ -793,7 +797,8 @@ Small, reviewable, in this order. One concern each.
 | 27 | Repo map tool + optional auto-inject. | 4 |
 | 28 | `AskUserQuestion` + plan-mode read-only until explicit exit. | 4 |
 
-PRs 1–12 landed. Wave 2 continues at PR 13 (`occ doctor` + `/cost`).
+PRs 1–13 landed. Wave 2 continues at PR 21 (XML/text tool-call recovery)
+and PR 22 (Ollama native + `num_ctx`), then PR 23 (`/provider` wizard).
 OpenClaude does not jump the queue. PRs 21–23 ride with Wave 2. 24–25
 with Wave 3. 26–28 with Wave 4.
 
