@@ -12,6 +12,7 @@ import json
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -207,6 +208,19 @@ class SessionStore:
                 "result": result,
             },
         )
+
+    def iter_events(self) -> Iterator[dict[str, Any]]:
+        """Yield each JSONL ledger object. Malformed lines are skipped."""
+        if not self.transcript_path.is_file():
+            return
+        with self.transcript_path.open(encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(event, dict):
+                    yield event
 
     def load_history(self) -> list[dict[str, Any]]:
         """Reconstruct the model history from the append-only ledger."""

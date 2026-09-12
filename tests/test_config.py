@@ -103,3 +103,16 @@ class TestParseConfig:
         path.write_text("model: gpt-4o\n")
         config = _parse_config(path)
         assert config.base_url is None
+
+    def test_parses_budget_and_custom_prices(self, tmp_path):
+        path = tmp_path / "occ.yml"
+        path.write_text(
+            "max_budget_usd: 4.5\n"
+            "model_prices:\n"
+            "  my-local:\n"
+            "    input: 0.0\n"
+            "    output: 0.0\n"
+        )
+        config = _parse_config(path)
+        assert config.max_budget_usd == 4.5
+        assert config.model_prices["my-local"]["input"] == 0.0

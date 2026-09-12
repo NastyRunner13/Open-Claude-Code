@@ -27,6 +27,7 @@ from open_claude_code.events import (
     ProviderFailure,
 )
 from open_claude_code.context import ContextManager
+from open_claude_code.cost import CostTracker
 from open_claude_code.providers.base import (
     Provider,
     ProviderResponse,
@@ -93,6 +94,7 @@ class Agent:
             max_context_tokens=config.max_context_tokens if config else 100000,
             provider=provider,
         )
+        self.cost_tracker = CostTracker.from_config(config)
 
         # Derive auto-approve set from config
         self._auto_approve: set[str] = set()
@@ -147,6 +149,17 @@ class Agent:
         turn_count = 0
         while True:
             await self._drain_inbox()
+            if self.cost_tracker.over_budget():
+                text = self.cost_tracker.budget_stop_text()
+                self._append_history({"role": "assistant", "content": text})
+                if self.middleware:
+                    await self.middleware.on_turn_end(text)
+                if self.session_store:
+                    self.session_store.record(
+                        "budget_exceeded", self.cost_tracker.snapshot().to_dict()
+                    )
+                await self.event_bus.emit(Stop(text=text))
+                return text
             if turn_count >= self.max_turns:
                 raise ProviderError(f"agent exceeded configured maximum of {self.max_turns} provider turns")
             turn_count += 1
@@ -252,6 +265,7 @@ class Agent:
 
                     result_str = str(result)
 
+                    self.cost_tracker.record_tool_result(block.name, result_str)
                     await self.event_bus.emit(
                         PostToolUse(
                             tool_name=block.name,
@@ -387,6 +401,7 @@ class Agent:
                     latency_ms=metadata.latency_ms if metadata else 0.0,
                     model=metadata.model if metadata else "",
                 )
+                self._record_usage(usage_event)
                 await self.event_bus.emit(usage_event)
                 if self.session_store:
                     self.session_store.record("usage_updated", usage_event.__dict__)
@@ -406,10 +421,18 @@ class Agent:
                 latency_ms=metadata.latency_ms,
                 model=metadata.model,
             )
+            self._record_usage(usage_event)
             await self.event_bus.emit(usage_event)
             if self.session_store:
                 self.session_store.record("usage_updated", usage_event.__dict__)
         return final
+
+    def _record_usage(self, usage_event: UsageUpdated) -> None:
+        """Fold a provider usage event into the session cost tracker."""
+        fallback = getattr(self.provider, "model_name", "") or ""
+        if not usage_event.model:
+            usage_event.model = fallback
+        self.cost_tracker.record_usage(usage_event, fallback_model=fallback)
 
     def _append_history(self, message: dict) -> None:
         """Add one model-history item and persist it when a session is enabled."""

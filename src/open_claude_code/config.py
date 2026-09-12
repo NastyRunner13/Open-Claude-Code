@@ -100,6 +100,11 @@ class AgentConfig:
     # Memory file search locations
     memory_dirs: list[str] = field(default_factory=lambda: ["."])
 
+    # Cost tracking. Prices are USD per million tokens. None budget means
+    # unlimited. Unknown-model prices never masquerade as $0.00.
+    max_budget_usd: float | None = None
+    model_prices: dict[str, dict] = field(default_factory=dict)
+
 
 # Default config file search paths. These are project-local only; there is
 # no user-global config file yet.
@@ -129,6 +134,17 @@ def save_config(config: AgentConfig, path: str | Path | None = None) -> None:
     raw["mcp_servers"] = config.mcp_servers
     
     config_path.write_text(yaml.safe_dump(raw, sort_keys=False))
+
+
+def find_config_path(path: str | Path | None = None) -> Path | None:
+    """Return the YAML config file that load_config() would use, if any."""
+    if path is not None:
+        config_path = Path(path)
+        return config_path if config_path.exists() else None
+    for candidate in _DEFAULT_PATHS:
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def load_config(path: str | Path | None = None) -> AgentConfig:
@@ -230,5 +246,9 @@ def _parse_config(path: Path) -> AgentConfig:
         config.prompt_caching = raw["prompt_caching"]
     if "memory_dirs" in raw:
         config.memory_dirs = raw["memory_dirs"]
+    if "max_budget_usd" in raw and raw["max_budget_usd"] is not None:
+        config.max_budget_usd = float(raw["max_budget_usd"])
+    if "model_prices" in raw and isinstance(raw["model_prices"], dict):
+        config.model_prices = raw["model_prices"]
 
     return config
