@@ -36,7 +36,7 @@ Tackle in four waves:
    work, scheduler, IDE.
 
 Wave 1 is done. Wave 2 is the current work. OpenClaude's first-run wizard
-and Ollama native path belong here, not in a later "parity" wave.
+belongs here, not in a later "parity" wave. Ollama native `/api/chat` landed.
 
 ---
 
@@ -50,7 +50,7 @@ and Ollama native path belong here, not in a later "parity" wave.
 | Shell | Partial | `workspace-write` denies unknown and destructive. Process-group kill on timeout. No background, no output stream. |
 | Web | Partial | Public-IP check and redirect revalidation exist. DNS is not pinned. Search ignores domain policy. |
 | `sandbox` tool | Partial | Schema and README no longer claim a jail. Still a subprocess with timeout only. |
-| Providers | Partial | Anthropic, OpenAI-compat, Gemini, Groq, Ollama, OpenRouter. YAML parses `base_url`. Groq is `groq/` prefix-only. Compat hosts fall back `max_tokens` / drop `include_usage` on 400. XML/text tool calls from Qwen/GLM/local models are recovered. `occ doctor` reports keys and routing. No `/provider`. Ollama uses the OpenAI shim. |
+| Providers | Partial | Anthropic, OpenAI-compat, Gemini, Groq, Ollama, OpenRouter. YAML parses `base_url`. Groq is `groq/` prefix-only. Compat hosts fall back `max_tokens` / drop `include_usage` on 400. XML/text tool calls from Qwen/GLM/local models are recovered. `occ doctor` reports keys and routing. No `/provider`. Ollama uses native `/api/chat` with `num_ctx` (default 32768). |
 | MCP | Partial | Stdio tools are callable. Env is merged with `os.environ`. JSON-RPC/`isError` fail. No HTTP, resources, prompts, OAuth. |
 | Plugins | Partial | Lifecycle hooks load at startup. No tools, slash commands, isolation, or packaging. |
 | Skills | Implemented | Catalog then on-demand load. `allowed_tools` and `scripts/` are unused. No `/<skill-name>` slash. |
@@ -135,7 +135,7 @@ Content-Length / NDJSON remains Wave 3.
 ## Wave 2. Providers: OpenRouter, Groq, and the ones we already have
 
 Groq already exists as a thin OpenAI-compat wrapper. OpenRouter is a first-class
-wrapper of `OpenAIProvider`. Remaining Wave 2 work is Ollama native + `num_ctx`, then `/provider`.
+wrapper of `OpenAIProvider`. Remaining Wave 2 work is `/provider`.
 
 Do not add a sixth SDK. Keep wrapping `OpenAIProvider` for OpenAI-compat
 hosts. Put provider-specific auth, headers, and model-id rules in small
@@ -151,7 +151,7 @@ wrappers and in the registry.
 | `groq/llama-3.3-70b-versatile` | Groq |
 | `openrouter/anthropic/claude-sonnet-4` | OpenRouter, sends `anthropic/claude-sonnet-4` |
 | `anthropic/claude-…` with `OPENROUTER_API_KEY` | OpenRouter |
-| `ollama/llama3.2` | Ollama at localhost:11434 |
+| `ollama/llama3.2` | Ollama native `/api/chat` at localhost:11434, `num_ctx` 32768 |
 | `--base-url` or YAML `base_url` | OpenAI-compat, needs `--api-key` or `OPENAI_API_KEY` |
 | `llama-*` even with `GROQ_API_KEY` | Anthropic (use `groq/` prefix) |
 | anything else | Anthropic |
@@ -180,10 +180,9 @@ wrappers and in the registry.
    wizard. First run is still "export a key and hope the model string maps"
    unless you run `occ doctor` first.
 9. `ProviderStreamEvent` is a second stream vocabulary no provider emits.
-10. Ollama goes through the OpenAI-compat shim at `localhost:11434/v1`.
-    OpenClaude dropped that path because Ollama's shim silently truncates
-    same-session history. They call Ollama's native chat API and set
-    `num_ctx` (default 32768).
+10. **Done.** Ollama native `/api/chat` with `num_ctx` (YAML / `OCC_OLLAMA_NUM_CTX`,
+    default 32768). `OLLAMA_HOST` honored; leftover `/v1` on `base_url` stripped.
+    OpenAI-compat remains for `--base-url` (LM Studio / vLLM).
 11. **Done.** Local and GLM/Qwen models that emit tool calls as XML or text
     (`<tool_call>`, GLM `<arg_key>`, Qwen `<function=…>`) are recovered on
     the OpenAI-compat path (Groq, Ollama, vLLM). Structured `tool_calls`
@@ -251,8 +250,8 @@ Keep the wrapper. Then:
   or similar), not a session snapshot. Keys stay out of the JSONL ledger.
   Switching providers mid-session must not rewrite `occ.yml` in the project
   unless the user asks.
-- Ollama native chat API plus `num_ctx`. Keep the OpenAI-compat wrapper as
-  fallback for LM Studio / vLLM.
+- **Done.** Ollama native chat API plus `num_ctx`. OpenAI-compat remains
+  the fallback for LM Studio / vLLM via `--base-url`.
 - **Done.** Recover XML / text-shaped tool calls from local and GLM/Qwen
   models before treating the turn as a plain-text Stop. Lives in
   `providers/tool_calls.py`, applied from `OpenAIProvider` so Groq, Ollama,
@@ -574,7 +573,7 @@ Keep these. OpenClaude is not ahead here.
 | Area | OpenClaude | OCC | Steal? |
 | --- | --- | --- | --- |
 | First-run setup | `/provider` wizard, saved user profiles, `doctor:runtime` JSON | env vars + YAML + model-name heuristics | Yes, Wave 2 |
-| Ollama | Native chat API, `num_ctx` 32768 | OpenAI-compat shim at `:11434/v1` | Yes, Wave 2 |
+| Ollama | Native chat API, `num_ctx` 32768 | Native `/api/chat`, `num_ctx` 32768 | Done |
 | Local tool calls | Recovers GLM/Qwen XML/text function calls | Text becomes the final answer | Yes, Wave 2 |
 | Cost | `/cost`: USD, per-model tokens, cache, duration, lines, routing tally, custom prices | `UsageUpdated` events, `/status` has no dollars | Yes, Wave 2/4 |
 | Sessions | `--continue`, `--fork-session`, `/rewind`, `/replay`, `/compact` | `--resume <id>`, `/clear` does not record a ledger event | Yes, Wave 3/4 |
@@ -724,7 +723,7 @@ inside waves we already have:
 | After PR | Add |
 | --- | --- |
 | 12 (Groq) | XML/text tool-call recovery. Ollama native + `num_ctx`. |
-| 21 (XML/text recovery) | Ollama native + `num_ctx`. Then `/provider`. |
+| 21 (XML/text recovery) | Ollama native + `num_ctx` (**done**). Then `/provider`. |
 | 13 (`doctor` + `/cost`) | `/provider` wizard + saved profiles. `/cost` model breakdown. Live `/models` for OpenRouter. |
 | 14 (skills) | `/<skill-name>` slash. `occ skills validate`. Hash-at-load drift warning. |
 | 16 (sessions) | `--continue`, `--fork-session`, `/compact`, `/clear` ledger event. |
@@ -792,7 +791,7 @@ Small, reviewable, in this order. One concern each.
 | 19 | Git commit/PR behind explicit policy. | 4 |
 | 20 | Interrupt + background shell + `/verify`. | 4 |
 | 21 | XML/text tool-call recovery for OpenAI-compat and Ollama. | 2 (done) |
-| 22 | Ollama native chat API + `num_ctx`. | 2 |
+| 22 | Ollama native chat API + `num_ctx`. | 2 (done) |
 | 23 | `/provider` wizard, user-level saved profiles, no keys in the ledger. | 2 |
 | 24 | `--continue` latest cwd session + `--fork-session`. | 3 |
 | 25 | Skills as `/<name>` commands + `occ skills validate`. | 3 |
@@ -800,9 +799,8 @@ Small, reviewable, in this order. One concern each.
 | 27 | Repo map tool + optional auto-inject. | 4 |
 | 28 | `AskUserQuestion` + plan-mode read-only until explicit exit. | 4 |
 
-PRs 1–13 and 21 landed. Wave 2 continues at PR 22 (Ollama native +
-`num_ctx`), then PR 23 (`/provider` wizard).
-OpenClaude does not jump the queue. PRs 22–23 ride with Wave 2. 24–25
+PRs 1–13, 21, and 22 landed. Wave 2 continues at PR 23 (`/provider` wizard).
+OpenClaude does not jump the queue. PR 23 rides with Wave 2. 24–25
 with Wave 3. 26–28 with Wave 4.
 
 ---

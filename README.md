@@ -109,11 +109,11 @@ occ --model groq/openai/gpt-oss-120b
 # OpenRouter (any catalog model; strips the openrouter/ prefix)
 occ --model openrouter/anthropic/claude-sonnet-4
 
-# Local models via Ollama
+# Local models via Ollama (native /api/chat, num_ctx 32768)
 occ --model ollama/llama3.2
 occ --model ollama/qwen2.5-coder
 
-# Any OpenAI-compatible endpoint (Together, vLLM, etc.)
+# Any OpenAI-compatible endpoint (Together, vLLM, LM Studio)
 occ --model my-model --base-url https://api.together.xyz/v1
 ```
 
@@ -127,12 +127,19 @@ occ --model my-model --base-url https://api.together.xyz/v1
 | `groq/*` | Groq (prefix required) | `GROQ_API_KEY` |
 | `openrouter/*` | OpenRouter | `OPENROUTER_API_KEY` |
 | `vendor/model` with `OPENROUTER_API_KEY` set | OpenRouter | `OPENROUTER_API_KEY` |
-| `ollama/*` | Ollama (local) | — |
+| `ollama/*` | Ollama native `/api/chat` | — |
 | `--base-url` / YAML `base_url` | OpenAI-compatible | `OPENAI_API_KEY` |
 
 Groq model ids change; the `groq/` prefix does not. Current production examples:
 `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `openai/gpt-oss-120b`,
 `openai/gpt-oss-20b`. Pass them as `groq/<id>`.
+
+Ollama uses the native chat API (`POST /api/chat`), not the OpenAI `/v1`
+shim, because the shim silently truncates same-session history. Context
+window is `num_ctx` (YAML `num_ctx`, or `OCC_OLLAMA_NUM_CTX`, default
+32768). Host is `OLLAMA_HOST` or `http://localhost:11434`. A leftover
+`/v1` on `base_url` is stripped. LM Studio and vLLM still go through
+`--base-url` as OpenAI-compat.
 
 Local and OpenAI-compatible models often emit tool calls as XML or text
 instead of filling `tool_calls`. OCC recovers Qwen `<tool_call>` JSON, GLM
@@ -316,7 +323,7 @@ src/open_claude_code/
 │   ├── gemini.py         # Google Gemini via google-genai
 │   ├── groq.py           # Groq cloud inference
 │   ├── openrouter.py     # OpenRouter (OpenAI-compat + attribution headers)
-│   └── ollama.py         # Local models via Ollama
+│   └── ollama.py         # Local models via Ollama native /api/chat
 │
 ├── tools/                # Tool definitions (schema + implementation)
 │   ├── read_file.py      # File reading with line limits
@@ -383,6 +390,8 @@ export GEMINI_API_KEY="..."
 export GROQ_API_KEY="gsk_..."
 export OPENROUTER_API_KEY="sk-or-..."
 export OCC_MODEL="gpt-4o"    # Override default model
+export OCC_OLLAMA_NUM_CTX=32768  # Ollama context window
+export OLLAMA_HOST="http://localhost:11434"
 ```
 
 ### Config File (`occ.yml`)
@@ -391,8 +400,10 @@ export OCC_MODEL="gpt-4o"    # Override default model
 # Model configuration
 model: "claude-sonnet-4-20250514"
 # model: "openrouter/anthropic/claude-sonnet-4"  # needs OPENROUTER_API_KEY
+# model: "ollama/qwen2.5-coder"                  # native /api/chat
 max_tokens: 16000
 max_tool_output: 10000
+# num_ctx: 32768   # Ollama only; or OCC_OLLAMA_NUM_CTX
 
 # OpenAI-compatible endpoint (Together, vLLM, …). Not needed for OpenRouter.
 # base_url: "https://api.together.xyz/v1"
@@ -597,6 +608,7 @@ Here are features and improvements planned for future releases:
 - [x] **Diff-based editing** — `apply_patch` applies unified diffs atomically
 - [x] **Cost tracking** — `/cost` from real usage, price table, `max_budget_usd`, `occ doctor`
 - [x] **Local tool-call recovery** — Qwen/GLM/XML/text function calls on OpenAI-compat hosts
+- [x] **Ollama native chat** — `/api/chat` with `num_ctx` (default 32768); `--base-url` stays OpenAI-compat
 
 See the [improvement analysis](https://github.com/NastyRunner13/Open-Claude-Code/blob/main/IMPROVEMENTS.md) for a detailed comparison with Claude Code and other agents.
 

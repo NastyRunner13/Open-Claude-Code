@@ -5,7 +5,10 @@
 model: "claude-sonnet-4-20250514"
 # model: "openrouter/anthropic/claude-sonnet-4"  # OPENROUTER_API_KEY
 # model: "groq/llama-3.3-70b-versatile"          # GROQ_API_KEY; groq/ prefix required
+# model: "ollama/qwen2.5-coder"                  # native /api/chat; no API key
 max_tokens: 16000
+# Ollama context window. Default 32768. Override with OCC_OLLAMA_NUM_CTX.
+# num_ctx: 32768
 max_tool_output: 10000
 
 # OpenAI-compatible endpoint (Together, vLLM, …). OpenRouter does not need this:

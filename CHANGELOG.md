@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Ollama uses the native `/api/chat` API with `num_ctx` (YAML `num_ctx` or `OCC_OLLAMA_NUM_CTX`, default 32768) instead of the OpenAI `/v1` shim, which truncates same-session history. `OLLAMA_HOST` is honored; a leftover `/v1` on `base_url` is stripped. LM Studio / vLLM still use `--base-url` as OpenAI-compat.
 - `occ doctor` prints which API keys are set (never values), which provider the model string maps to, whether Ollama answers, and whether `rg` is on PATH. `--json` emits a persistable CI report; `--report PATH` writes it. Exit code 1 if an error-severity check fails.
 - `/cost` shows per-model input/output/cache tokens, USD (or `price unknown`), API vs wall duration, and lines added/removed. Optional `max_budget_usd` / `--max-budget` stops the loop. Custom YAML `model_prices` override the built-in table. Totals restore on `--resume`.
 - Sub-agent runtime: built-in `explore` / `plan` / `general-purpose` roles, background spawn + `wait_agent`, `kill_agent`, `send_agent_message` (steer/queue), `resume_from`, `isolation=worktree` with `apply_agent_worktree`, personas from `.occ/personas`, and `run_workflow` phase barriers. Children get their own planning store. Nested spawn stays denied.
