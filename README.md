@@ -71,6 +71,13 @@ export ANTHROPIC_API_KEY="sk-ant-..."   # or OPENAI_API_KEY, GEMINI_API_KEY, etc
 occ
 ```
 
+Or let the wizard remember the provider path (keys stay in env vars):
+
+```bash
+occ provider wizard   # saves to ~/.occ/profiles.yml, never writes occ.yml
+occ doctor            # verifies keys, routing, Ollama, and the active profile
+```
+
 You'll be greeted with an interactive REPL:
 
 ```
@@ -145,6 +152,25 @@ Local and OpenAI-compatible models often emit tool calls as XML or text
 instead of filling `tool_calls`. OCC recovers Qwen `<tool_call>` JSON, GLM
 `<arg_key>`/`<arg_value>`, Qwen3 `<function=…>`, and similar templates on
 that path. Structured `tool_calls` still win when the host fills them.
+
+### Saved provider profiles
+
+`occ provider wizard` remembers *which* provider path works in
+`~/.occ/profiles.yml` (model + `base_url` / `num_ctx` / `max_tokens` — never
+keys). Plain `occ` loads the active profile; a project `occ.yml` still wins
+for the keys it sets, so saving a profile never rewrites a checked-in config.
+
+```bash
+occ provider list                 # saved profiles (* = active)
+occ provider save local           # remember the current model
+occ provider use local            # active for next `occ`
+occ --profile local               # override once for this run
+occ provider models openrouter    # live catalog (cached 24h)
+```
+
+Inside the REPL, `/provider` shows the effective model, `/provider use
+<name>` switches the live session without touching `occ.yml`, and
+`/provider save <name>` remembers the current model.
 
 ---
 
@@ -390,6 +416,7 @@ export GEMINI_API_KEY="..."
 export GROQ_API_KEY="gsk_..."
 export OPENROUTER_API_KEY="sk-or-..."
 export OCC_MODEL="gpt-4o"    # Override default model
+export OCC_PROFILE="local"    # Use a saved provider profile once
 export OCC_OLLAMA_NUM_CTX=32768  # Ollama context window
 export OLLAMA_HOST="http://localhost:11434"
 ```
@@ -491,6 +518,7 @@ mcp_servers:
 
 ```bash
 occ --model gpt-4o           # Override model
+occ --profile local           # Use a saved provider profile (see above)
 occ --mode plan               # Start in plan mode
 occ --max-tokens 32000        # Increase response length
 occ --skip-approval            # Auto-approve all tools (caution!)
@@ -499,9 +527,11 @@ occ --base-url https://...    # Custom endpoint
 occ --config ./my-config.yml  # Custom config path
 occ --resume 20260712T...     # Resume a durable local session
 occ --max-budget 5            # Stop when known session cost reaches $5
-occ doctor                    # Keys, provider mapping, Ollama, ripgrep
+occ doctor                    # Keys, provider mapping, Ollama, ripgrep, profile
 occ doctor --json             # Same report as JSON for CI
 occ doctor --report out.json  # Persist the JSON report
+occ provider list             # Saved provider profiles in ~/.occ/profiles.yml
+occ provider wizard           # Interactive first-run provider setup
 ```
 
 ---
@@ -525,6 +555,10 @@ Inside the interactive REPL:
 | `/memory show` | Preview loaded memory content |
 | `/status` | Show model, permissions, context, and session details |
 | `/cost` | Show token usage, USD (or `price unknown`), API duration, and lines changed |
+| `/provider` | Show model → provider, auth, and saved profiles |
+| `/provider list` | List saved profiles in `~/.occ/profiles.yml` |
+| `/provider use <name>` | Switch the live session to a saved profile |
+| `/provider save <name>` | Save current model as a profile (never writes `occ.yml`) |
 | `/sessions` | List durable local sessions |
 | `/changes` | Show current Git status and uncommitted diff |
 | `/undo <file>` | Restore the latest OCC file snapshot |
@@ -607,6 +641,7 @@ Here are features and improvements planned for future releases:
 - [x] **Multi-agent orchestration** — built-in explore/plan/GP children, background wait, worktrees, resume, steer, and `run_workflow` phase barriers
 - [x] **Diff-based editing** — `apply_patch` applies unified diffs atomically
 - [x] **Cost tracking** — `/cost` from real usage, price table, `max_budget_usd`, `occ doctor`
+- [x] **Provider profiles** — `occ provider wizard`, `~/.occ/profiles.yml`, `/provider` switch, `--profile`, live `/models` catalog
 - [x] **Local tool-call recovery** — Qwen/GLM/XML/text function calls on OpenAI-compat hosts
 - [x] **Ollama native chat** — `/api/chat` with `num_ctx` (default 32768); `--base-url` stays OpenAI-compat
 

@@ -35,8 +35,9 @@ Tackle in four waves:
 4. Add modern coding-agent workflows. Review, git mutation, LSP, background
    work, scheduler, IDE.
 
-Wave 1 is done. Wave 2 is the current work. OpenClaude's first-run wizard
-belongs here, not in a later "parity" wave. Ollama native `/api/chat` landed.
+Wave 1 is done. Wave 2 provider work is done (`/provider` wizard landed).
+Wave 3 is the current work. OpenClaude's first-run wizard belongs to Wave 2,
+not a later "parity" wave. Ollama native `/api/chat` landed.
 
 ---
 
@@ -50,7 +51,7 @@ belongs here, not in a later "parity" wave. Ollama native `/api/chat` landed.
 | Shell | Partial | `workspace-write` denies unknown and destructive. Process-group kill on timeout. No background, no output stream. |
 | Web | Partial | Public-IP check and redirect revalidation exist. DNS is not pinned. Search ignores domain policy. |
 | `sandbox` tool | Partial | Schema and README no longer claim a jail. Still a subprocess with timeout only. |
-| Providers | Partial | Anthropic, OpenAI-compat, Gemini, Groq, Ollama, OpenRouter. YAML parses `base_url`. Groq is `groq/` prefix-only. Compat hosts fall back `max_tokens` / drop `include_usage` on 400. XML/text tool calls from Qwen/GLM/local models are recovered. `occ doctor` reports keys and routing. No `/provider`. Ollama uses native `/api/chat` with `num_ctx` (default 32768). |
+| Providers | Implemented | Anthropic, OpenAI-compat, Gemini, Groq, Ollama, OpenRouter. YAML parses `base_url`. Groq is `groq/` prefix-only. Compat hosts fall back `max_tokens` / drop `include_usage` on 400. XML/text tool calls from Qwen/GLM/local models are recovered. `occ doctor` reports keys, routing, and the active profile. `/provider` wizard + `~/.occ/profiles.yml` + `--profile`; live `/models` catalog (24h cache). No per-model `context_window` overrides yet. |
 | MCP | Partial | Stdio tools are callable. Env is merged with `os.environ`. JSON-RPC/`isError` fail. No HTTP, resources, prompts, OAuth. |
 | Plugins | Partial | Lifecycle hooks load at startup. No tools, slash commands, isolation, or packaging. |
 | Skills | Implemented | Catalog then on-demand load. `allowed_tools` and `scripts/` are unused. No `/<skill-name>` slash. |
@@ -176,9 +177,9 @@ wrappers and in the registry.
    `max_tokens` on 400, and remembers which one the host accepted.
 7. Anthropic enables extended thinking for every model whose name contains
    `"claude"`. Haiku and older snapshots 400.
-8. **Done (`occ doctor`).** Remaining: no `list_models()`, no `/provider`
-   wizard. First run is still "export a key and hope the model string maps"
-   unless you run `occ doctor` first.
+8. **Done (`occ doctor` + `/provider`).** `list_models()` is a cached live
+   catalog (`occ provider models`, 24h disk cache). `/provider` wizard writes
+   `~/.occ/profiles.yml`; first run is `occ provider wizard` + `occ doctor`.
 9. `ProviderStreamEvent` is a second stream vocabulary no provider emits.
 10. **Done.** Ollama native `/api/chat` with `num_ctx` (YAML / `OCC_OLLAMA_NUM_CTX`,
     default 32768). `OLLAMA_HOST` honored; leftover `/v1` on `base_url` stripped.
@@ -246,18 +247,23 @@ Keep the wrapper. Then:
 - **Done.** `occ doctor`: which keys are set, which provider the model
   string maps to, Ollama reachable, `rg` present. `--json` and `--report`
   emit a persistable `{ok, checks[]}` report for CI.
-- `/provider` wizard that writes a user-level profile (`~/.occ/profiles.yml`
-  or similar), not a session snapshot. Keys stay out of the JSONL ledger.
-  Switching providers mid-session must not rewrite `occ.yml` in the project
-  unless the user asks.
+- **Done (`/provider` wizard + saved profiles).** Writes `~/.occ/profiles.yml`
+  (`model` + `base_url`/`num_ctx`/`max_tokens`, never keys). `/provider use`
+  switches the live session without rewriting project `occ.yml`. `occ
+  --profile <name>` / `OCC_PROFILE` overrides once. REPL `/provider`,
+  `occ provider wizard|list|show|save|use|delete|models`, doctor `profile`
+  check. Keys stay out of the JSONL ledger (snapshots redact credentials;
+  profiles strip secret keys on load).
 - **Done.** Ollama native chat API plus `num_ctx`. OpenAI-compat remains
   the fallback for LM Studio / vLLM via `--base-url`.
 - **Done.** Recover XML / text-shaped tool calls from local and GLM/Qwen
   models before treating the turn as a plain-text Stop. Lives in
   `providers/tool_calls.py`, applied from `OpenAIProvider` so Groq, Ollama,
   and vLLM all get it.
-- OpenRouter (and any OpenAI-compat host that serves `/models`): optional
-  live catalog for `/model`. Cache it. Do not hit the network every turn.
+- **Done (cached live catalog).** OpenRouter and any OpenAI-compat host that
+  serves `/models` (plus Ollama `/api/tags`) via `occ provider models`
+  and `/provider models`. 24h disk cache under `~/.occ/cache`. Never hit
+  per turn.
 - Per-model `context_window` and `max_output_tokens` in YAML.
 
 Provider profiles (fast / strong / local) wait until Wave 4. One working
@@ -792,16 +798,17 @@ Small, reviewable, in this order. One concern each.
 | 20 | Interrupt + background shell + `/verify`. | 4 |
 | 21 | XML/text tool-call recovery for OpenAI-compat and Ollama. | 2 (done) |
 | 22 | Ollama native chat API + `num_ctx`. | 2 (done) |
-| 23 | `/provider` wizard, user-level saved profiles, no keys in the ledger. | 2 |
+| 23 | `/provider` wizard, user-level saved profiles, no keys in the ledger. | 2 (done) |
 | 24 | `--continue` latest cwd session + `--fork-session`. | 3 |
 | 25 | Skills as `/<name>` commands + `occ skills validate`. | 3 |
 | 26 | `occ exec --bg` / `ps` / `logs` / `kill`. | 4 |
 | 27 | Repo map tool + optional auto-inject. | 4 |
 | 28 | `AskUserQuestion` + plan-mode read-only until explicit exit. | 4 |
 
-PRs 1–13, 21, and 22 landed. Wave 2 continues at PR 23 (`/provider` wizard).
-OpenClaude does not jump the queue. PR 23 rides with Wave 2. 24–25
-with Wave 3. 26–28 with Wave 4.
+PRs 1–13 and 21–23 landed. Wave 2 provider work is done. Wave 3 is next
+(PR 14 skills hardening, PR 16 sessions, PR 24 `--continue`/fork).
+OpenClaude does not jump the queue. PR 24 rides with Wave 3. 26–28
+with Wave 4.
 
 ---
 

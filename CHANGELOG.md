@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - OpenAI-compatible hosts (Ollama, Groq, vLLM, OpenRouter) recover XML/text tool calls from Qwen, GLM, Gemma, Mistral, Llama, and Kimi templates when `message.tool_calls` is empty. Names are gated on the tools sent this turn; narrated mid-sentence markup is ignored.
 - First-class OpenRouter provider: `openrouter/<vendor>/<model>` (and `vendor/model` when `OPENROUTER_API_KEY` is set). Sends OpenRouter attribution headers. Missing key raises `ProviderError`.
 - YAML `base_url` is parsed so OpenAI-compatible endpoints can live in `occ.yml`.
+- `/provider` wizard plus user-level saved profiles (`~/.occ/profiles.yml`): `occ provider wizard|list|show|save|use|delete|models`, REPL `/provider` status/switch, and `occ --profile <name>` / `OCC_PROFILE` for one run. Profiles store model + `base_url`/`num_ctx`/`max_tokens` only — keys stay in env vars and out of the JSONL ledger. Project `occ.yml` still wins for the keys it sets. Live `/models` catalog for OpenRouter/OpenAI-compat/Ollama (24h disk cache, never fetched per turn).
 
 ### Fixed
 

@@ -6,6 +6,11 @@ model: "claude-sonnet-4-20250514"
 # model: "openrouter/anthropic/claude-sonnet-4"  # OPENROUTER_API_KEY
 # model: "groq/llama-3.3-70b-versatile"          # GROQ_API_KEY; groq/ prefix required
 # model: "ollama/qwen2.5-coder"                  # native /api/chat; no API key
+#
+# Tip: `occ provider wizard` remembers the working model in
+# ~/.occ/profiles.yml (never keys). Plain `occ` loads the active profile;
+# this file still wins for the keys it sets. `occ --profile <name>`
+# overrides once. See `occ provider list|show|save|use|models`.
 max_tokens: 16000
 # Ollama context window. Default 32768. Override with OCC_OLLAMA_NUM_CTX.
 # num_ctx: 32768
