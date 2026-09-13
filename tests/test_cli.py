@@ -81,6 +81,20 @@ def test_exec_missing_task_exits_2(monkeypatch):
     assert exc.value.code == 2
 
 
+def test_exec_rejects_unquoted_extra_words(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["occ", "exec", "do", "the", "thing"])
+    with pytest.raises(SystemExit) as exc:
+        parse_args()
+    assert exc.value.code == 2
+
+
+def test_doctor_rejects_extra_tokens(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["occ", "doctor", "extra"])
+    with pytest.raises(SystemExit) as exc:
+        parse_args()
+    assert exc.value.code == 2
+
+
 def test_exec_parses_json_and_quiet(monkeypatch):
     monkeypatch.setattr(
         sys,

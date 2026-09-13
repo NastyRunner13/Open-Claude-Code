@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+import yaml
 
 from open_claude_code.config import AgentConfig, load_config, _parse_config
 
@@ -46,6 +47,24 @@ class TestLoadConfig:
         config = load_config()
         assert config.model == "gpt-4o"
         assert config.mode == "ask"
+
+    def test_invalid_yaml_raises(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "occ.yml").write_text("model: [unterminated\n", encoding="utf-8")
+        with pytest.raises(yaml.YAMLError):
+            load_config()
+
+    def test_explicit_invalid_yaml_raises(self, tmp_path):
+        path = tmp_path / "occ.yml"
+        path.write_text("model: [unterminated\n", encoding="utf-8")
+        with pytest.raises(yaml.YAMLError):
+            load_config(path)
+
+    def test_non_mapping_yaml_raises(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "occ.yml").write_text("- just a list\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="YAML mapping"):
+            load_config()
 
 
 class TestParseConfig:
