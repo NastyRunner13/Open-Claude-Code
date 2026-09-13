@@ -40,6 +40,7 @@ from open_claude_code.middleware.skills import SkillsMiddleware
 from open_claude_code.modes import run_mode
 from open_claude_code.planning import PlanningMiddleware
 from open_claude_code.providers import ProviderError, create_provider
+from open_claude_code.providers.registry import resolve_provider
 from open_claude_code.sessions import SessionStore
 from open_claude_code.subagents import AgentRegistry, PersonaRegistry
 from open_claude_code.system_prompt import MODE_PROMPTS
@@ -131,21 +132,66 @@ def parse_args() -> argparse.Namespace:
         help="Exec approval mode: deny privileged calls, auto-approve permitted calls, or full access.",
     )
     parser.add_argument(
+        "--profile",
+        default=None,
+        metavar="NAME",
+        help="Use a saved provider profile from ~/.occ/profiles.yml (overrides the active profile).",
+    )
+    parser.add_argument(
+        "--refresh",
+        "--no-cache",
+        action="store_true",
+        dest="refresh",
+        help="Bust the cached /models catalog (`occ provider models`).",
+    )
+    parser.add_argument(
+        "--no-activate",
+        action="store_true",
+        help="Save a profile without making it the default (`occ provider save`).",
+    )
+    parser.add_argument(
         "command",
         nargs="?",
-        choices=["exec", "doctor"],
-        help="exec runs a non-interactive task; doctor reports environment health.",
+        choices=["exec", "doctor", "provider"],
+        help="exec runs a non-interactive task; doctor reports environment health; provider manages saved provider profiles.",
     )
-    parser.add_argument("task", nargs="?", help="Task text for `occ exec`.")
+    parser.add_argument("task", nargs="?", help="Task text for `occ exec`, or subcommand for `occ provider` (list|show|save|use|delete|wizard|models).")
+    parser.add_argument(
+        "provider_args",
+        nargs="*",
+        help="Extra arguments for `occ provider` (e.g. profile name).",
+    )
     args = parser.parse_args()
+    extra = list(args.provider_args or [])
     if args.command == "exec" and not args.task:
         parser.error("occ exec requires a task argument")
+    if args.command == "exec" and extra:
+        parser.error("unrecognized arguments: " + " ".join(extra))
+    if args.command == "doctor" and (args.task or extra):
+        bits = [item for item in (args.task, *extra) if item]
+        parser.error("unrecognized arguments: " + " ".join(bits))
+    if args.command is None and extra:
+        parser.error("unrecognized arguments: " + " ".join(extra))
     return args
 
 
 def resolve_config(args: argparse.Namespace) -> AgentConfig:
     """Merge config file, env vars, and CLI flags into final config."""
     config = load_config(args.config)
+
+    # Saved provider profile: explicit --profile (or OCC_PROFILE) wins over
+    # the active pointer stored in ~/.occ/profiles.yml. Project occ.yml
+    # values loaded above still win unless the profile is explicitly asked
+    # for — a checked-in config is never silently overridden.
+    requested_profile = getattr(args, "profile", None) or os.environ.get("OCC_PROFILE", "").strip() or None
+    if requested_profile:
+        from open_claude_code import profiles as _profiles
+
+        settings = _profiles.get_profile(requested_profile)
+        if settings is None:
+            raise SystemExit(f"unknown provider profile '{requested_profile}' (see `occ provider list`)")
+        _profiles.apply_profile_to_config(config, settings, replace=True)
+        config.active_profile = requested_profile.strip()
 
     # CLI and env overrides
     if args.model:
@@ -192,6 +238,359 @@ def resolve_config(args: argparse.Namespace) -> AgentConfig:
         config.max_budget_usd = args.max_budget
 
     return config
+
+
+def check_provider_auth(
+    config: AgentConfig,
+    *,
+    environ: dict[str, str] | None = None,
+) -> tuple[bool, str, str | None]:
+    """Fail-fast auth check for the effective model. No network, no secrets."""
+    from open_claude_code.doctor import REQUIRED_ENV, _is_placeholder
+
+    env = environ if environ is not None else os.environ
+    provider = resolve_provider(config.model, config.base_url)
+    required = REQUIRED_ENV.get(provider)
+    if required is None:
+        return True, "no API key required", None
+    cli_key = (config.api_key or "").strip()
+    if cli_key and not _is_placeholder(cli_key):
+        return True, "api_key supplied via CLI/config", required
+    if cli_key and _is_placeholder(cli_key):
+        return False, "api_key looks like a placeholder", required
+    env_val = str(env.get(required, "") or "")
+    if not env_val.strip():
+        return False, f"{required} is not set", required
+    if _is_placeholder(env_val):
+        return False, f"{required} looks like a placeholder", required
+    return True, f"{required} is set", required
+
+
+def run_provider_command(
+    config: AgentConfig,
+    args: argparse.Namespace,
+    *,
+    print_fn: object = None,
+    input_fn: object = None,
+) -> int:
+    """Implement `occ provider ...`. Never writes project occ.yml or secrets."""
+    from open_claude_code import profiles as _profiles
+
+    out = print_fn if callable(print_fn) else print
+    ask = input_fn if callable(input_fn) else input
+    sub = (getattr(args, "task", None) or "").strip().lower()
+    extra = list(getattr(args, "provider_args", None) or [])
+    as_json = bool(getattr(args, "json", False))
+    flags = {item for item in extra if item.startswith("--")}
+    positionals = [item for item in extra if not item.startswith("--")]
+    refresh = bool(getattr(args, "refresh", False)) or "--refresh" in flags or "--no-cache" in flags
+    no_activate = bool(getattr(args, "no_activate", False)) or "--no-activate" in flags
+
+    def emit(payload: object) -> None:
+        out(json.dumps(payload, indent=2, sort_keys=True))
+
+    if sub in {"", "show", "status"} and not positionals:
+        data = _profiles.load_profiles_file()
+        provider = resolve_provider(config.model, config.base_url)
+        auth_ok, auth_summary, _required = check_provider_auth(config)
+        if as_json:
+            emit({
+                "model": config.model,
+                "provider": provider,
+                "base_url": config.base_url,
+                "active_profile": config.active_profile or data.get("active"),
+                "profiles_path": data.get("path"),
+                "auth_ok": auth_ok,
+                "auth": auth_summary,
+            })
+            return 0
+        out(f"  Model: {config.model} -> {provider}")
+        if config.base_url:
+            out(f"  Base URL: {config.base_url}")
+        active = config.active_profile or data.get("active")
+        out(f"  Profile: {active or '(none)'}  [{data.get('path')}]")
+        out(f"  Auth: {'ok' if auth_ok else 'MISSING'} - {auth_summary}")
+        if not auth_ok:
+            out("  Fix: set the key above, then `occ doctor` to verify.")
+        if data.get("profiles"):
+            out(f"  Saved: {', '.join(sorted(data['profiles']))}  (`occ provider use <name>`)")
+        else:
+            out("  No saved profiles yet. Run `occ provider wizard`.")
+        return 0
+
+    if sub == "list":
+        data = _profiles.load_profiles_file()
+        profiles = data.get("profiles", {})
+        active = config.active_profile or data.get("active")
+        if as_json:
+            emit({"active": active, "profiles": profiles, "path": data.get("path")})
+            return 0
+        if not profiles:
+            out("  No saved profiles. Run `occ provider wizard`.")
+            return 0
+        for name in sorted(profiles):
+            mark = "*" if name == active else " "
+            out(f"  {mark} {_profiles.describe_profile(name, profiles[name])}")
+        return 0
+
+    if sub == "show":
+        data = _profiles.load_profiles_file()
+        if not positionals:
+            return run_provider_command(
+                config,
+                argparse.Namespace(task="", provider_args=[], json=as_json),
+                print_fn=out,
+            )
+        settings = _profiles.get_profile(positionals[0])
+        if settings is None:
+            out(f"  Unknown profile '{positionals[0]}'. (`occ provider list`)")
+            return 1
+        if as_json:
+            emit({"name": positionals[0].strip(), "settings": settings})
+            return 0
+        out(f"  {_profiles.describe_profile(positionals[0].strip(), settings)}")
+        return 0
+
+    if sub == "save":
+        if not positionals:
+            out("  Usage: occ provider save <name>")
+            return 2
+        try:
+            saved = _profiles.save_profile(
+                positionals[0],
+                config.model,
+                base_url=config.base_url,
+                num_ctx=config.num_ctx,
+                max_tokens=config.max_tokens,
+                make_active=not no_activate,
+            )
+        except ValueError as exc:
+            out(f"  {exc}")
+            return 2
+        if not no_activate:
+            config.active_profile = saved.name
+        data = _profiles.load_profiles_file()
+        out(f"  Saved profile '{saved.name}' -> {data.get('path')}")
+        out("  Keys are never written there; set them via env vars.")
+        return 0
+
+    if sub == "use":
+        if not positionals:
+            out("  Usage: occ provider use <name>")
+            return 2
+        try:
+            settings = _profiles.set_active_profile(positionals[0])
+        except ValueError as exc:
+            out(f"  {exc}")
+            return 1
+        _profiles.apply_profile_to_config(config, settings, replace=True)
+        config.active_profile = positionals[0].strip()
+        auth_ok, auth_summary, _required = check_provider_auth(config)
+        if not auth_ok:
+            out(f"  Profile '{config.active_profile}' selected, but auth FAILS: {auth_summary}")
+            out("  Set the key above; `occ doctor` verifies. Next `occ` loads this profile.")
+            return 1
+        out(f"  Active profile: {config.active_profile} ({config.model})")
+        out("  Next `occ` loads it. In the REPL, `/provider use` switches immediately.")
+        return 0
+
+    if sub == "delete":
+        if not positionals:
+            out("  Usage: occ provider delete <name>")
+            return 2
+        if _profiles.delete_profile(positionals[0]):
+            if config.active_profile == positionals[0].strip():
+                config.active_profile = None
+            out(f"  Deleted profile '{positionals[0].strip()}'.")
+            return 0
+        out(f"  Unknown profile '{positionals[0]}'. (`occ provider list`)")
+        return 1
+
+    if sub == "wizard":
+        return _run_provider_wizard(config, print_fn=out, input_fn=ask)
+
+    if sub == "models":
+        target = positionals[0] if positionals else config.model
+        lowered = target.strip().lower()
+        if lowered in _profiles.PROVIDER_GUIDE:
+            provider = lowered
+        else:
+            provider = resolve_provider(target, config.base_url)
+        models, source = _profiles.fetch_remote_models(
+            provider,
+            base_url=config.base_url,
+            api_key=config.api_key,
+            use_cache=not refresh,
+        )
+        if as_json:
+            emit({"provider": provider, "source": source, "models": models[:100]})
+            return 0 if models else 1
+        if not models:
+            out(f"  No catalog ({source}). Pass a full model id explicitly.")
+            return 1
+        out(f"  {provider} models [{source}, showing {min(50, len(models))} of {len(models)}]:")
+        for item in models[:50]:
+            out(f"    {item}")
+        return 0
+
+    out(f"  Unknown provider subcommand '{sub or '(none)'}'.")
+    out("  Usage: occ provider [list|show [name]|save <name>|use <name>|delete <name>|wizard|models [provider]]")
+    return 2
+
+
+def _run_provider_wizard(
+    config: AgentConfig,
+    *,
+    print_fn: object = None,
+    input_fn: object = None,
+) -> int:
+    """Interactive first-run setup. Writes ~/.occ/profiles.yml, never occ.yml."""
+    from open_claude_code import profiles as _profiles
+
+    out = print_fn if callable(print_fn) else print
+    ask = input_fn if callable(input_fn) else input
+
+    def prompt(label: str, default: str = "") -> str:
+        hint = f" [{default}]" if default else ""
+        try:
+            answer = ask(f"{label}{hint}: ")
+        except (EOFError, KeyboardInterrupt):
+            return default
+        answer = (answer or "").strip()
+        return answer or default
+
+    out("")
+    out("  Provider setup - saves to ~/.occ/profiles.yml (keys stay in env vars).")
+    out("")
+    guide = _profiles.PROVIDER_GUIDE
+    names = list(guide)
+    for index, key in enumerate(names, 1):
+        item = guide[key]
+        env_label = item["env"] or "(no key)"
+        out(f"    {index}. {key:<14} {env_label:<20} e.g. {item['examples']}")
+    out("")
+    choice = prompt("  Pick a provider [1-7 or name]", "openrouter").strip().lower()
+    selected = ""
+    if choice.isdigit() and 1 <= int(choice) <= len(names):
+        selected = names[int(choice) - 1]
+    elif choice in guide:
+        selected = choice
+    else:
+        # Allow pasting a model id directly; infer the provider.
+        guessed = resolve_provider(choice, None)
+        selected = guessed if guessed in guide else ""
+        if not selected:
+            out(f"  Unknown provider '{choice}'.")
+            return 2
+        out(f"  Inferred provider '{selected}' from '{choice}'.")
+        default_model = choice
+    if not selected:
+        out("  Setup cancelled.")
+        return 2
+
+    item = guide[selected]
+    default_model = locals().get("default_model") or item["examples"].split()[0]
+    if selected == "openai-compat":
+        default_model = "my-model"
+    model = prompt("  Model id", default_model).strip() or default_model
+    base_url = ""
+    if selected in {"openai-compat", "openai", "openrouter", "ollama"}:
+        base_default = config.base_url or ""
+        if selected == "openai-compat" and not base_default:
+            base_default = "https://api.together.xyz/v1"
+        base_url = prompt("  Base URL (blank for default)", base_default).strip()
+        if selected == "ollama" and not base_url:
+            base_url = ""
+    name_default = selected if selected != "openai-compat" else "custom"
+    name = prompt("  Save as profile name", name_default).strip() or name_default
+    try:
+        saved = _profiles.save_profile(
+            name,
+            model if "/" in model or selected in {"anthropic", "openai", "gemini"} else (
+                model if selected == "openai-compat" else f"{selected}/{model.lstrip('/')}"
+                if not model.startswith(f"{selected}/") else model
+            ),
+            base_url=base_url or None,
+            num_ctx=config.num_ctx,
+            max_tokens=config.max_tokens,
+            make_active=True,
+        )
+    except ValueError as exc:
+        out(f"  {exc}")
+        return 2
+    _profiles.apply_profile_to_config(config, saved.to_dict(), replace=True)
+    config.active_profile = saved.name
+    auth_ok, auth_summary, required = check_provider_auth(config)
+    data = _profiles.load_profiles_file()
+    out("")
+    out(f"  Saved '{saved.name}': {saved.to_dict()} -> {data.get('path')}")
+    if required:
+        current = "set" if auth_ok else "MISSING"
+        out(f"  Key {required}: {current} - {auth_summary}")
+        if not auth_ok:
+            out(f"  Next: export {required}='<key>' (never paste keys into chat).")
+            out("  Then run `occ doctor` to verify.")
+            return 1
+    else:
+        out("  No API key needed. Make sure `ollama serve` is running.")
+        out("  Then run `occ doctor` to verify.")
+    out("  `occ --profile "
+        + saved.name
+        + "` overrides once; plain `occ` loads the active profile.")
+    return 0
+
+
+def switch_provider_in_session(
+    config: AgentConfig,
+    agent: Agent,
+    profile_name: str,
+) -> tuple[bool, str]:
+    """Switch the live REPL provider to a saved profile. Does not rewrite occ.yml."""
+    from open_claude_code import profiles as _profiles
+
+    settings = _profiles.get_profile(profile_name)
+    if settings is None:
+        known = ", ".join(sorted(_profiles.list_profiles())) or "(no profiles saved)"
+        return False, f"unknown profile '{profile_name}'. Known: {known}"
+    candidate_model = str(settings.get("model", "") or "").strip()
+    candidate_base = settings.get("base_url")
+    probe_config = AgentConfig(
+        model=candidate_model or config.model,
+        base_url=candidate_base,
+        api_key=config.api_key,
+        num_ctx=settings.get("num_ctx", config.num_ctx),
+        max_tokens=int(settings.get("max_tokens", config.max_tokens)),
+    )
+    auth_ok, auth_summary, _required = check_provider_auth(probe_config)
+    if not auth_ok:
+        return False, f"auth FAILS for '{profile_name.strip()}': {auth_summary}"
+    try:
+        new_provider = create_provider(
+            model=probe_config.model,
+            max_tokens=probe_config.max_tokens,
+            api_key=config.api_key,
+            base_url=probe_config.base_url,
+            prompt_caching=config.prompt_caching,
+            num_ctx=probe_config.num_ctx,
+        )
+    except ProviderError as exc:
+        return False, str(exc)
+    except Exception as exc:
+        return False, f"cannot create provider: {exc}"
+    _profiles.apply_profile_to_config(config, settings, replace=True)
+    config.active_profile = profile_name.strip()
+    try:
+        _profiles.set_active_profile(config.active_profile)
+    except ValueError:
+        pass
+    agent.provider = new_provider
+    try:
+        agent._context_mgr.provider = new_provider
+    except AttributeError:
+        pass
+    provider_id = resolve_provider(config.model, config.base_url)
+    return True, f"switched to '{config.active_profile}' ({config.model} → {provider_id})"
+
 
 
 def _json_value(value: object) -> object:
@@ -470,6 +869,11 @@ async def handle_slash_command(
         help_table.add_row("/memory show", "Preview loaded memory content")
         help_table.add_row("/status", "Show model, permissions, context, and session details")
         help_table.add_row("/cost", "Show token usage, USD cost, API duration, and lines changed")
+        help_table.add_row("/provider", "Show model → provider, auth, and saved profiles")
+        help_table.add_row("/provider list", "List saved profiles in ~/.occ/profiles.yml")
+        help_table.add_row("/provider show <name>", "Show one saved profile")
+        help_table.add_row("/provider use <name>", "Switch the live session to a saved profile")
+        help_table.add_row("/provider save <name>", "Save current model as a profile (never writes occ.yml)")
         help_table.add_row("/sessions", "List durable local sessions")
         help_table.add_row("/changes", "Show current Git status and uncommitted diff")
         help_table.add_row("/undo <file>", "Restore the latest OCC snapshot for a file")
@@ -632,6 +1036,158 @@ async def handle_slash_command(
         console.print()
         return "handled"
 
+    if cmd == "/provider":
+        import shlex
+
+        from open_claude_code import profiles as _profiles
+
+        try:
+            tokens = shlex.split(rest) if rest else []
+        except ValueError:
+            tokens = rest.split() if rest else []
+        sub = tokens[0].lower() if tokens else ""
+        args_rest = tokens[1:] if tokens else []
+
+        if sub in {"", "show", "status"} and not args_rest:
+            data = _profiles.load_profiles_file()
+            provider_id = resolve_provider(config.model, config.base_url)
+            auth_ok, auth_summary, _required = check_provider_auth(config)
+            console.print()
+            console.print(f"  Model: [bold cyan]{config.model}[/] → {provider_id}")
+            if config.base_url:
+                console.print(f"  Base URL: {config.base_url}")
+            active = config.active_profile or data.get("active")
+            console.print(f"  Profile: {active or '(none)'}  [{data.get('path')}]")
+            console.print(f"  Auth: {'ok' if auth_ok else 'MISSING'} — {auth_summary}")
+            if data.get("profiles"):
+                console.print(f"  Saved: {', '.join(sorted(data['profiles']))}")
+            else:
+                console.print("  No saved profiles yet. `/provider save <name>` remembers this one.")
+            console.print("  `occ provider wizard` walks first-run setup. `occ doctor` verifies.", style="dim")
+            console.print()
+            return "handled"
+
+        if sub == "show" and args_rest:
+            settings = _profiles.get_profile(args_rest[0])
+            console.print()
+            if settings is None:
+                console.print(f"  Unknown profile '{args_rest[0]}'. (`/provider list`)", style="red")
+            else:
+                console.print(f"  {_profiles.describe_profile(args_rest[0].strip(), settings)}")
+            console.print()
+            return "handled"
+
+        if sub == "list":
+            data = _profiles.load_profiles_file()
+            profiles = data.get("profiles", {})
+            active = config.active_profile or data.get("active")
+            console.print()
+            if not profiles:
+                console.print("  No saved profiles. `/provider save <name>` remembers this one.", style="dim")
+            else:
+                table = Table(show_header=True, header_style="bold cyan")
+                table.add_column("Active")
+                table.add_column("Name", style="bold")
+                table.add_column("Model")
+                table.add_column("Base URL")
+                for name in sorted(profiles):
+                    settings = profiles[name]
+                    table.add_row(
+                        "*" if name == active else "",
+                        name,
+                        str(settings.get("model", "")),
+                        str(settings.get("base_url", "")),
+                    )
+                console.print(table)
+            console.print()
+            return "handled"
+
+        if sub == "save":
+            if not args_rest:
+                console.print("  Usage: /provider save <name>", style="dim")
+                console.print()
+                return "handled"
+            try:
+                saved = _profiles.save_profile(
+                    args_rest[0],
+                    config.model,
+                    base_url=config.base_url,
+                    num_ctx=config.num_ctx,
+                    max_tokens=config.max_tokens,
+                    make_active=True,
+                )
+            except ValueError as exc:
+                console.print(f"  {exc}", style="red")
+                console.print()
+                return "handled"
+            config.active_profile = saved.name
+            console.print(f"  Saved profile '{saved.name}' (occ.yml untouched; keys never written).")
+            console.print()
+            return "handled"
+
+        if sub == "use":
+            if not args_rest:
+                console.print("  Usage: /provider use <name>", style="dim")
+                console.print()
+                return "handled"
+            ok, message = switch_provider_in_session(config, agent, args_rest[0])
+            style = "green" if ok else "red"
+            console.print(f"  {message}", style=style)
+            console.print()
+            return "handled"
+
+        if sub == "delete":
+            if not args_rest:
+                console.print("  Usage: /provider delete <name>", style="dim")
+                console.print()
+                return "handled"
+            if _profiles.delete_profile(args_rest[0]):
+                if config.active_profile == args_rest[0].strip():
+                    config.active_profile = None
+                console.print(f"  Deleted profile '{args_rest[0].strip()}'.")
+            else:
+                console.print(f"  Unknown profile '{args_rest[0]}'.", style="red")
+            console.print()
+            return "handled"
+
+        if sub == "models":
+            refresh = "--refresh" in args_rest or "--no-cache" in args_rest
+            positionals = [item for item in args_rest if not item.startswith("--")]
+            target = positionals[0] if positionals else config.model
+            lowered = target.strip().lower()
+            if lowered in _profiles.PROVIDER_GUIDE:
+                provider_id = lowered
+            else:
+                provider_id = resolve_provider(target, config.base_url)
+            models, source = _profiles.fetch_remote_models(
+                provider_id,
+                base_url=config.base_url,
+                api_key=config.api_key,
+                use_cache=not refresh,
+            )
+            console.print()
+            if not models:
+                console.print(f"  No catalog ({source}). Pass a full model id explicitly.", style="dim")
+            else:
+                console.print(f"  {provider_id} models [{source}, showing {min(30, len(models))} of {len(models)}]:")
+                for item in models[:30]:
+                    console.print(f"    {item}")
+            console.print()
+            return "handled"
+
+        if sub == "wizard":
+            console.print()
+            console.print("  Interactive setup runs in the shell: `occ provider wizard`", style="dim")
+            console.print("  It saves to ~/.occ/profiles.yml (keys stay in env vars).")
+            console.print("  Quick version: `/provider save <name>` remembers this model,")
+            console.print("  `/provider use <name>` switches without touching occ.yml.")
+            console.print()
+            return "handled"
+
+        console.print("  Usage: /provider [list|show [name]|save <name>|use <name>|delete <name>|models|wizard]", style="dim")
+        console.print()
+        return "handled"
+
     # Try middleware slash commands
     mw_result = await middleware_mgr.handle_slash_command(cmd, rest)
     if mw_result is not None:
@@ -662,6 +1218,9 @@ async def run() -> None:
         raise SystemExit(
             run_doctor_cli(config, json_output=args.json, report_path=args.report)
         )
+
+    if args.command == "provider":
+        raise SystemExit(run_provider_command(config, args))
 
     session_store: SessionStore | None = None
     if args.resume:

@@ -64,6 +64,8 @@ class DoctorReport:
     model: str
     provider: str
     config_path: str | None
+    active_profile: str | None = None
+    profiles_path: str | None = None
     checks: list[DoctorCheck] = field(default_factory=list)
 
     @property
@@ -181,7 +183,7 @@ def collect_doctor_report(
             id="provider",
             ok=True,
             severity="info",
-            summary=f"{config.model} → {provider}",
+            summary=f"{config.model} -> {provider}",
             detail=f"base_url={config.base_url}" if config.base_url else "",
         )
     )
@@ -279,6 +281,47 @@ def collect_doctor_report(
         )
     )
 
+    try:
+        from open_claude_code import profiles as _profiles
+
+        _profile_data = _profiles.load_profiles_file()
+        _active = config.active_profile or _profile_data.get("active")
+        _profiles_path = str(_profile_data.get("path") or _profiles.get_profiles_path())
+        _saved = _profile_data.get("profiles", {})
+    except Exception:
+        _active, _profiles_path, _saved = config.active_profile, None, {}
+    if _active and isinstance(_saved, dict) and _active in _saved:
+        _entry = _saved[_active]
+        checks.append(
+            DoctorCheck(
+                id="profile",
+                ok=True,
+                severity="info",
+                summary=f"{_active}: {str(_entry.get('model', ''))}",
+                detail=str(_profiles_path or ""),
+            )
+        )
+    elif _active:
+        checks.append(
+            DoctorCheck(
+                id="profile",
+                ok=True,
+                severity="warn",
+                summary=f"{_active} (not in {_profiles_path})",
+                detail="profile name set but no matching saved entry",
+            )
+        )
+    else:
+        checks.append(
+            DoctorCheck(
+                id="profile",
+                ok=True,
+                severity="info",
+                summary="no saved profile (using occ.yml/defaults)",
+                detail=str(_profiles_path or ""),
+            )
+        )
+
     return DoctorReport(
         version=__version__,
         python=".".join(str(part) for part in py),
@@ -287,6 +330,8 @@ def collect_doctor_report(
         model=config.model,
         provider=provider,
         config_path=str(found_config) if found_config else None,
+        active_profile=_active,
+        profiles_path=_profiles_path,
         checks=checks,
     )
 
@@ -319,8 +364,10 @@ def _format_human(report: DoctorReport, saved_to: str | Path | None = None) -> s
         f"OCC doctor {report.version}  [{status}]",
         f"  python    {report.python}",
         f"  cwd       {report.cwd}",
-        f"  model     {report.model} → {report.provider}",
+        f"  model     {report.model} -> {report.provider}",
         f"  config    {report.config_path or '(defaults)'}",
+        f"  profile   {report.active_profile or '(none)'}"
+        + (f"  [{report.profiles_path}]" if report.profiles_path else ""),
         "",
     ]
     for check in report.checks:

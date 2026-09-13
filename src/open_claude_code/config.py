@@ -108,6 +108,11 @@ class AgentConfig:
     max_budget_usd: float | None = None
     model_prices: dict[str, dict] = field(default_factory=dict)
 
+    # User-level provider profile selected from ~/.occ/profiles.yml.
+    # Set by load_config()/--profile; project occ.yml values still win for
+    # model/base_url so a checked-in config is never silently overridden.
+    active_profile: str | None = None
+
 
 # Default config file search paths. These are project-local only; there is
 # no user-global config file yet.
@@ -156,28 +161,66 @@ def load_config(path: str | Path | None = None) -> AgentConfig:
     Search order:
       1. Explicit path (if given)
       2. Project-local config files (occ.yml, occ.yaml, .occ/config.yml)
-      3. Defaults
+      3. User-level provider profile (``~/.occ/profiles.yml`` active entry)
+      4. Defaults
 
-    There is no user-global config path.
+    A project file always wins over the user profile for the keys it sets,
+    so saving a profile never rewrites a checked-in ``occ.yml`` by surprise.
     """
+    base = AgentConfig()
+    _apply_user_profile(base)
+
     if path is not None:
         config_path = Path(path)
         if not config_path.exists():
             raise FileNotFoundError(f"Config file not found: {config_path}")
-        return _parse_config(config_path)
+        _apply_file_to_config(base, config_path)
+        return base
 
     for candidate in _DEFAULT_PATHS:
         if candidate.exists():
-            return _parse_config(candidate)
+            _apply_file_to_config(base, candidate)
+            return base
 
-    return AgentConfig()
+    return base
+
+
+def _apply_user_profile(config: AgentConfig) -> None:
+    """Overlay the active user profile, if any. Never raises, never reads keys."""
+    try:
+        from open_claude_code import profiles as _profiles
+    except Exception:
+        return
+    try:
+        name, settings = _profiles.get_active_profile()
+    except Exception:
+        return
+    if not settings:
+        return
+    try:
+        _profiles.apply_profile_to_config(config, settings)
+    except Exception:
+        return
+    config.active_profile = name
+
+
+def _apply_file_to_config(config: AgentConfig, path: Path) -> None:
+    """Overlay one YAML file onto an existing config (project files win)."""
+    raw = yaml.safe_load(path.read_text()) or {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"Config file must be a YAML mapping: {path}")
+    _apply_raw(config, raw)
 
 
 def _parse_config(path: Path) -> AgentConfig:
     """Parse a YAML config file into an AgentConfig."""
-    raw = yaml.safe_load(path.read_text()) or {}
-
     config = AgentConfig()
+    _apply_file_to_config(config, path)
+    return config
+
+
+def _apply_raw(config: AgentConfig, raw: dict) -> None:
+    """Copy known YAML keys onto a config. Shared by load and parse paths."""
 
     if "model" in raw:
         config.model = raw["model"]
@@ -255,5 +298,3 @@ def _parse_config(path: Path) -> AgentConfig:
         config.max_budget_usd = float(raw["max_budget_usd"])
     if "model_prices" in raw and isinstance(raw["model_prices"], dict):
         config.model_prices = raw["model_prices"]
-
-    return config
