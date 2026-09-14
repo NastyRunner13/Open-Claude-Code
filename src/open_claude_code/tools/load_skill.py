@@ -47,10 +47,36 @@ async def load_skill(name: str, _skill_manager=None) -> ToolResult:
             skill_name=name,
         )
 
+    lines = [
+        f"Skill '{skill.name}' loaded successfully.",
+        "",
+        f"Description: {skill.description}",
+        "",
+        "Instructions have been added to your system prompt. "
+        "Follow the loaded skill's instructions for future tool calls.",
+    ]
+    if skill.allowed_tools:
+        lines.append(
+            "Tools are now narrowed to: "
+            + ", ".join(skill.allowed_tools)
+            + ". This cannot raise privilege above the session policy."
+        )
+    bundled = []
+    for label, paths in (
+        ("script", skill.scripts),
+        ("example", skill.examples),
+        ("asset", skill.assets),
+    ):
+        bundled.extend(f"  {label}: {path}" for path in paths)
+    if bundled:
+        lines.append(
+            "Bundled files you may read_file or run_shell "
+            "(they have not been executed):"
+        )
+        lines.extend(bundled)
+
     return ToolResult.ok(
-        f"Skill '{skill.name}' loaded successfully.\n\n"
-        f"Description: {skill.description}\n\n"
-        f"Instructions have been added to your system prompt. "
-        f"Follow the loaded skill's instructions for future tool calls.",
+        "\n".join(lines),
         skill_name=skill.name,
+        allowed_tools=list(skill.allowed_tools),
     )

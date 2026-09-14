@@ -26,6 +26,7 @@ class SkillsMiddleware(Middleware):
 
     - Injects the load_skill tool
     - Adds loaded skill instructions to the system prompt
+    - Narrows the tool list to loaded skills' allowed_tools (never elevates)
     - Handles /skill slash commands
     """
 
@@ -63,6 +64,21 @@ class SkillsMiddleware(Middleware):
         parts = [self._manager.get_catalog_prompt(), self._manager.get_prompt_additions()]
         return "\n\n".join(part for part in parts if part)
 
+    async def on_before_send(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+    ) -> tuple[list[dict], list[dict]]:
+        """Hide tools the loaded skills do not allow. Does not add tools."""
+        return messages, self._manager.filter_tool_schemas(tools)
+
+    async def on_before_tool(self, tool_name: str, tool_params: dict[str, Any]) -> tuple[bool, str]:
+        """Deny calls outside a loaded skill's allowed_tools (narrow, never elevate)."""
+        reason = self._manager.restriction_reason(tool_name)
+        if reason is None:
+            return True, ""
+        return False, reason
+
     def handle_slash_command(self, cmd: str, rest: str) -> str | None:
         """Handle /skill slash commands."""
         if cmd != "/skill":
@@ -73,11 +89,18 @@ class SkillsMiddleware(Middleware):
         elif rest == "reload":
             self._manager.rescan()
             console.print("  Skills rescanned.", style="dim")
+            for warning in self._manager.scan_warnings:
+                console.print(f"  {warning}", style="dim yellow")
         elif rest.startswith("load "):
             name = rest[5:].strip()
             skill = self._manager.load(name)
             if skill:
                 console.print(f"  Loaded skill: [bold cyan]{skill.name}[/]")
+                if skill.allowed_tools:
+                    console.print(
+                        f"  allowed tools: {', '.join(skill.allowed_tools)}",
+                        style="dim",
+                    )
             else:
                 console.print(f"  Skill '{name}' not found.", style="dim red")
         elif rest.startswith("unload "):

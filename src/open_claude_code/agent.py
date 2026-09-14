@@ -144,7 +144,6 @@ class Agent:
         self._append_history({"role": "user", "content": user_input})
 
         tool_schemas = [tool["schema"] for tool in self.tools.values()]
-        system_prompt = self._build_system_prompt()
 
         turn_count = 0
         while True:
@@ -167,6 +166,9 @@ class Agent:
             if not self.config or self.config.context_compaction:
                 self.history = await self._context_mgr.auto_compact_async(self.history)
 
+            # Rebuild each provider call so load_skill / plan updates take effect
+            # in the same user turn instead of waiting for the next run().
+            system_prompt = self._build_system_prompt()
             provider_history = self.history
             provider_tool_schemas = tool_schemas
             if self.middleware:
