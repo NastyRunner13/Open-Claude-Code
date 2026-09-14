@@ -54,7 +54,7 @@ not a later "parity" wave. Ollama native `/api/chat` landed.
 | Providers | Implemented | Anthropic, OpenAI-compat, Gemini, Groq, Ollama, OpenRouter. YAML parses `base_url`. Groq is `groq/` prefix-only. Compat hosts fall back `max_tokens` / drop `include_usage` on 400. XML/text tool calls from Qwen/GLM/local models are recovered. `occ doctor` reports keys, routing, and the active profile. `/provider` wizard + `~/.occ/profiles.yml` + `--profile`; live `/models` catalog (24h cache). No per-model `context_window` overrides yet. |
 | MCP | Partial | Stdio tools are callable. Env is merged with `os.environ`. JSON-RPC/`isError` fail. No HTTP, resources, prompts, OAuth. |
 | Plugins | Partial | Lifecycle hooks load at startup. No tools, slash commands, isolation, or packaging. |
-| Skills | Implemented | Catalog then on-demand load. `allowed_tools` and `scripts/` are unused. No `/<skill-name>` slash. |
+| Skills | Implemented | Catalog then on-demand load. Loaded `allowed_tools` narrows tools (never elevates). Bundled `scripts/` `examples/` `assets/` paths are injected, not auto-exec'd. Malformed skills log. No `/<skill-name>` slash. No `occ skills` CLI. |
 | Subagents | Implemented | Built-in explore/plan/GP, background wait/kill/steer, resume, worktrees, personas, `run_workflow` barriers. Child planning store is isolated. No Rhai workflow dialect or TUI tasks pane. |
 | Hooks | Partial | Trusted `occ.yml` command hooks. Prompt/HTTP/MCP/agent hooks missing. Post-hooks ignore failure. |
 | Sessions | Partial | JSONL ledger, resume, rename, export. No `--continue` or fork. Plan/skills/compaction not restored. Token deltas bloat the file. |
@@ -313,9 +313,12 @@ What works: discovery of `SKILL.md`, catalog in the prompt, `load_skill`,
 
 Finish:
 
-- Enforce `allowed_tools` when a skill is loaded (narrow, do not elevate).
-- Surface `scripts/`, `examples/`, `assets/` paths in the injected prompt
-  so the model can `read_file` / `run_shell` them. Do not auto-exec.
+- **Done.** Enforce `allowed_tools` when a skill is loaded (narrow, do not
+  elevate). Patterns use `fnmatch` and intersect across loaded skills.
+  Schemas are stripped before the model sees them; `on_before_tool` still
+  denies a call that sneaks through.
+- **Done.** Surface `scripts/`, `examples/`, `assets/` paths in the injected
+  prompt so the model can `read_file` / `run_shell` them. Do not auto-exec.
 - Slash invocation `/<skill-name>` or `/skill run <name>`, matching how
   Claude Code and OpenClaude merged custom commands into skills. OpenClaude
   treats `SKILL.md` files as prompt-type commands the model can also invoke
@@ -326,7 +329,8 @@ Finish:
   (reject `curl | sh` and credential-harvest wording) and a content hash
   recorded at install so a later edit is visible.
 - Fix the `list_skills()` schema lie. **Done** (Wave 1).
-- Malformed skills should log, not `pass`.
+- **Done.** Malformed skills log a warning and show up under Skipped in
+  `/skill list` instead of `pass`.
 
 ### Plugins
 
@@ -789,7 +793,7 @@ Small, reviewable, in this order. One concern each.
 | 11 | First-class OpenRouter provider + YAML `base_url`. | 2 (done) |
 | 12 | Groq heuristic removal, `include_usage`, max_tokens fallback. | 2 (done) |
 | 13 | `occ doctor` + `/cost` from real usage. | 2 (done) |
-| 14 | Skills: enforce `allowed_tools`, expose scripts, fix `list_skills` lie. | 3 |
+| 14 | Skills: enforce `allowed_tools`, expose scripts, fix `list_skills` lie. | 3 (done) |
 | 15 | Subagent isolation (own middleware), built-in explore/plan roles. | 3 (done) |
 | 16 | Session: no per-token ledger, persist plan, `/clear` is real. | 3 |
 | 17 | MCP streamable HTTP + per-server policy. | 3 |
@@ -805,10 +809,10 @@ Small, reviewable, in this order. One concern each.
 | 27 | Repo map tool + optional auto-inject. | 4 |
 | 28 | `AskUserQuestion` + plan-mode read-only until explicit exit. | 4 |
 
-PRs 1–13 and 21–23 landed. Wave 2 provider work is done. Wave 3 is next
-(PR 14 skills hardening, PR 16 sessions, PR 24 `--continue`/fork).
-OpenClaude does not jump the queue. PR 24 rides with Wave 3. 26–28
-with Wave 4.
+PRs 1–14 and 21–23 landed. Wave 2 provider work is done. Wave 3 continues
+with PR 16 sessions, PR 24 `--continue`/fork, then PR 25 skill slash
+commands and `occ skills validate`. OpenClaude does not jump the queue.
+PR 24 rides with Wave 3. 26–28 with Wave 4.
 
 ---
 

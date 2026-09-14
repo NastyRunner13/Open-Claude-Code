@@ -53,6 +53,9 @@ auto_approve:
   - wait_agent
 
 # Skill directories (searched in order)
+# SKILL.md may set allowed_tools: [read_file, grep_search] to narrow
+# (never elevate) the tool list while loaded. scripts/, examples/, and
+# assets/ are listed in the prompt; they are not auto-executed.
 skills_dirs:
   - "~/.occ/skills"
   - ".occ/skills"

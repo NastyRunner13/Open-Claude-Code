@@ -260,13 +260,18 @@ OCC is designed to be extended in three ways, from simplest to most powerful:
 
 ### 1. 📝 Skills — Prompt Extensions
 
-Teach the agent new workflows by dropping a `SKILL.md` file into a skills directory. Skills are Markdown files with YAML frontmatter:
+Teach the agent new workflows by dropping a `SKILL.md` file into a skills directory. Skills are Markdown files with YAML frontmatter. Optional `allowed_tools` **narrows** the tool list while the skill is loaded — it cannot grant tools the session policy already denies. Bundled `scripts/`, `examples/`, and `assets/` paths are injected so the model can `read_file` or `run_shell` them; they are never auto-executed.
 
 ```yaml
 # .occ/skills/pr-review/SKILL.md
 ---
 name: PR Review Expert
 description: Best practices for reviewing pull requests
+allowed_tools:
+  - read_file
+  - grep_search
+  - git_status
+  - git_diff
 ---
 
 When asked to review a PR, follow this workflow:
@@ -279,6 +284,7 @@ When asked to review a PR, follow this workflow:
 ```
 ❯ /skill load PR Review Expert
   Loaded skill: PR Review Expert
+  allowed tools: read_file, grep_search, git_status, git_diff
 ```
 
 ### 2. 🐍 Plugins — Python Lifecycle Hooks

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Loaded skills honor `allowed_tools` (and `allowed-tools`): the tool list is intersected with the skill's patterns (globs allowed). This only narrows; it cannot raise privilege above `ToolPolicy`. Bundled `scripts/`, `examples/`, and `assets/` paths are injected into the prompt and the `load_skill` result so the model can `read_file` / `run_shell` them. They are not executed automatically. Malformed `SKILL.md` files are logged and listed as skipped instead of swallowed.
 - Ollama uses the native `/api/chat` API with `num_ctx` (YAML `num_ctx` or `OCC_OLLAMA_NUM_CTX`, default 32768) instead of the OpenAI `/v1` shim, which truncates same-session history. `OLLAMA_HOST` is honored; a leftover `/v1` on `base_url` is stripped. LM Studio / vLLM still use `--base-url` as OpenAI-compat.
 - `occ doctor` prints which API keys are set (never values), which provider the model string maps to, whether Ollama answers, and whether `rg` is on PATH. `--json` emits a persistable CI report; `--report PATH` writes it. Exit code 1 if an error-severity check fails.
 - `/cost` shows per-model input/output/cache tokens, USD (or `price unknown`), API vs wall duration, and lines added/removed. Optional `max_budget_usd` / `--max-budget` stops the loop. Custom YAML `model_prices` override the built-in table. Totals restore on `--resume`.
@@ -20,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- System prompt is rebuilt on every provider call so `load_skill` instructions (and plan updates) apply in the same user turn.
 - `/plan <task>` and `/agent <task>` now run one-shot plan/agent mode. `/agent list` still lists roles; `/plan show|clear|progress` still manage the checklist.
 - `occ exec` is non-interactive by default: privileged tools are denied unless `--approval-mode auto` or `full-access` is set. Missing task exits 2. `--quiet` suppresses non-final JSON progress.
 - Child agents cannot raise `permission_mode` above the parent. Spawn approval shows `task` and `permission_mode`.
